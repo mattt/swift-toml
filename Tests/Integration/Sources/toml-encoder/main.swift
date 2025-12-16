@@ -7,7 +7,7 @@ struct TOMLEncoderCLI {
         do {
             let input = FileHandle.standardInput.readDataToEndOfFile()
             guard let jsonString = String(data: input, encoding: .utf8) else {
-                fputs("Error: Invalid UTF-8 input\n", stderr)
+                FileHandle.standardError.write(Data("Error: Invalid UTF-8 input\n".utf8))
                 exit(1)
             }
 
@@ -17,7 +17,7 @@ struct TOMLEncoderCLI {
             let toml = try encoder.encodeToString(value)
             print(toml, terminator: "")
         } catch {
-            fputs("Error: \(error)\n", stderr)
+            FileHandle.standardError.write(Data("Error: \(error)\n".utf8))
             exit(1)
         }
     }
