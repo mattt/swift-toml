@@ -14,7 +14,7 @@ let package = Package(
         .executableTarget(
             name: "toml-decoder",
             dependencies: [
-                .product(name: "TOML", package: "TOML")
+                .product(name: "TOML", package: "swift-toml")
             ],
             path: "Sources/toml-decoder",
             swiftSettings: [
@@ -24,7 +24,7 @@ let package = Package(
         .executableTarget(
             name: "toml-encoder",
             dependencies: [
-                .product(name: "TOML", package: "TOML")
+                .product(name: "TOML", package: "swift-toml")
             ],
             path: "Sources/toml-encoder",
             swiftSettings: [
