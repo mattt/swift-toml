@@ -22,6 +22,7 @@ let package = Package(
         .target(
             name: "CTomlPlusPlus",
             path: "Sources/CTomlPlusPlus",
+            sources: ["ctoml.cpp"],
             publicHeadersPath: "include",
             cxxSettings: [
                 .headerSearchPath(".")
@@ -29,17 +30,11 @@ let package = Package(
         ),
         .target(
             name: "TOML",
-            dependencies: ["CTomlPlusPlus"],
-            swiftSettings: [
-                .interoperabilityMode(.Cxx)
-            ]
+            dependencies: ["CTomlPlusPlus"]
         ),
         .testTarget(
             name: "TOMLTests",
-            dependencies: ["TOML"],
-            swiftSettings: [
-                .interoperabilityMode(.Cxx)
-            ]
+            dependencies: ["TOML"]
         ),
     ],
     cxxLanguageStandard: .cxx17
