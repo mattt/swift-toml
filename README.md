@@ -1,5 +1,10 @@
 # Swift TOML
 
+[![Platforms](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fmattt%2Fswift-toml%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/mattt/swift-toml)
+[![Swift-versions](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fmattt%2Fswift-toml%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/mattt/swift-toml)
+[![CI](https://github.com/mattt/swift-toml/actions/workflows/ci.yml/badge.svg)](https://github.com/mattt/swift-toml/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/mattt/swift-toml.svg)](LICENSE.md)
+
 A Swift implementation of [TOML](https://toml.io) (Tom's Obvious, Minimal Language),
 a human-readable configuration file format. 
 Built on [toml++](https://github.com/marzer/tomlplusplus)
