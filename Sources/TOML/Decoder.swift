@@ -241,7 +241,14 @@ public final class TOMLDecoder {
 
         switch node.type {
         case CTOML_STRING:
-            let str = node.data.string_value.map { String(cString: $0) } ?? ""
+            let strData = node.data.string_value
+            let str: String
+            if let data = strData.data {
+                let buffer = UnsafeRawBufferPointer(start: data, count: strData.length)
+                str = String(decoding: buffer, as: UTF8.self)
+            } else {
+                str = ""
+            }
             guard str.count <= limits.maxStringLength else {
                 throw TOMLDecodingError.invalidData(
                     "String exceeds maximum length of \(limits.maxStringLength) characters"
@@ -329,7 +336,14 @@ public final class TOMLDecoder {
             var dict: [String: TOMLValue] = [:]
             if let keys = node.data.table_value.keys, let tableValues = node.data.table_value.values {
                 for i in 0 ..< count {
-                    let key = String(cString: keys[i]!)
+                    let keyData = keys[i]
+                    let key: String
+                    if let data = keyData.data {
+                        let buffer = UnsafeRawBufferPointer(start: data, count: keyData.length)
+                        key = String(decoding: buffer, as: UTF8.self)
+                    } else {
+                        key = ""
+                    }
                     dict[key] = try convertNode(tableValues[i], depth: depth + 1)
                 }
             }

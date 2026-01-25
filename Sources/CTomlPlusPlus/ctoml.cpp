@@ -19,10 +19,11 @@ struct CTomlTable {
     std::vector<void*> allocations;  // Generic pointer storage
     std::string error_message;
 
-    // Store a string and return a persistent pointer to it
-    const char* store_string(const std::string& s) {
+    // Store a string and return a persistent CTomlString with length
+    CTomlString store_string(const std::string& s) {
         strings.push_back(s);
-        return strings.back().c_str();
+        const auto& stored = strings.back();
+        return CTomlString{stored.c_str(), stored.size()};
     }
 
     // Allocate an array of nodes
@@ -33,12 +34,12 @@ struct CTomlTable {
         return static_cast<CTomlNode*>(mem);
     }
 
-    // Allocate an array of key pointers
-    const char** alloc_keys(size_t count) {
+    // Allocate an array of CTomlString keys
+    CTomlString* alloc_keys(size_t count) {
         if (count == 0) return nullptr;
-        void* mem = malloc(count * sizeof(const char*));
+        void* mem = malloc(count * sizeof(CTomlString));
         allocations.push_back(mem);
-        return static_cast<const char**>(mem);
+        return static_cast<CTomlString*>(mem);
     }
 
     ~CTomlTable() {
@@ -64,8 +65,7 @@ static CTomlNode convert_table(const toml::table& table, CTomlTable* storage) {
 
     size_t i = 0;
     for (auto& [k, v] : table) {
-        const char* key_str = storage->store_string(std::string(k));
-        result.data.table_value.keys[i] = key_str;
+        result.data.table_value.keys[i] = storage->store_string(std::string(k));
         result.data.table_value.values[i] = convert_node(v, storage);
         i++;
     }

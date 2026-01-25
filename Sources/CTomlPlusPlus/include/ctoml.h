@@ -47,6 +47,12 @@ typedef struct {
     int32_t offset_minutes;
 } CTomlDateTime;
 
+// String with explicit length (handles embedded null characters)
+typedef struct {
+    const char* data;
+    size_t length;
+} CTomlString;
+
 // Forward declaration for self-referential types
 struct CTomlNode;
 
@@ -58,7 +64,7 @@ typedef struct {
 
 // Table data structure
 typedef struct {
-    const char** keys;
+    CTomlString* keys;
     struct CTomlNode* values;
     size_t count;
 } CTomlTableData;
@@ -67,7 +73,7 @@ typedef struct {
 typedef struct CTomlNode {
     CTomlNodeType type;
     union {
-        const char* string_value;
+        CTomlString string_value;
         int64_t integer_value;
         double float_value;
         bool boolean_value;
