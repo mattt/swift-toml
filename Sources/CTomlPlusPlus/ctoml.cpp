@@ -53,11 +53,7 @@ static CTomlNode convert_table(const toml::table& table, CTomlTable* storage) {
     CTomlNode result;
     result.type = CTOML_TABLE;
 
-    size_t count = 0;
-    for (auto& [k, v] : table) {
-        (void)k; (void)v;
-        count++;
-    }
+    size_t count = table.size();
 
     result.data.table_value.count = count;
     result.data.table_value.keys = storage->alloc_keys(count);
