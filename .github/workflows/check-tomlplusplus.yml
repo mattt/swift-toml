@@ -2,8 +2,9 @@ name: Check toml++ Updates
 
 on:
   schedule:
-    - cron: '0 0 1 1 *'  # Yearly on January 1st at midnight UTC
-  workflow_dispatch:  # Allow manual trigger
+    - cron: "0 0 * * 1" # Weekly on Monday at midnight UTC
+  workflow_dispatch: # Allow manual trigger
+
 
 jobs:
   check:
