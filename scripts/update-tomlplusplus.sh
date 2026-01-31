@@ -1,12 +1,35 @@
 #!/bin/bash
 # Updates toml++ to the latest version from GitHub releases
-# Usage: ./scripts/update-tomlplusplus.sh
+# Usage: ./scripts/update-tomlplusplus.sh [--check] [--github-output <path>]
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 TOML_HPP="$PROJECT_ROOT/Sources/CTomlPlusPlus/toml.hpp"
+
+CHECK_ONLY=0
+GITHUB_OUTPUT_PATH=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check)
+            CHECK_ONLY=1
+            shift
+            ;;
+        --github-output)
+            GITHUB_OUTPUT_PATH="${2:-}"
+            shift 2
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 # Get current version from toml.hpp
 if [[ -f "$TOML_HPP" ]]; then
@@ -31,8 +54,25 @@ fi
 
 echo "Latest toml++ version: $LATEST_VERSION"
 
+if [[ -n "$GITHUB_OUTPUT_PATH" ]]; then
+    {
+        echo "current=${CURRENT_VERSION}"
+        echo "latest=${LATEST_VERSION}"
+        if [[ "$CURRENT_VERSION" != "$LATEST_VERSION" ]]; then
+            echo "update_available=true"
+        else
+            echo "update_available=false"
+        fi
+    } >> "$GITHUB_OUTPUT_PATH"
+fi
+
 if [[ "$CURRENT_VERSION" == "$LATEST_VERSION" ]]; then
     echo "Already up to date!"
+    exit 0
+fi
+
+if [[ "$CHECK_ONLY" == "1" ]]; then
+    echo "Update available."
     exit 0
 fi
 
