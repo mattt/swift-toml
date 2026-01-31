@@ -45,6 +45,9 @@ jobs:
         with:
           go-version: "stable"
 
+      - name: Lint
+        run: make lint
+
       - name: Test
         run: make test
 
@@ -72,6 +75,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
+
+      - name: Lint
+        run: make lint
 
       - name: Test
         run: make test
