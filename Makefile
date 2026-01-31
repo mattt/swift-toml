@@ -6,6 +6,9 @@ CPP_SOURCES ?= Sources/CTomlPlusPlus/ctoml.cpp Sources/CTomlPlusPlus/include/cto
 
 .PHONY: build test test-unit test-integration update check format format-swift lint lint-swift format-cpp lint-cpp clean
 
+# Default target: build, test, and lint
+all: build test lint
+
 # Build the package
 build:
 	$(SWIFT) build
