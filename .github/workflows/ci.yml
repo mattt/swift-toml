@@ -45,6 +45,9 @@ jobs:
         with:
           go-version: "stable"
 
+      - name: Install clang-format
+        run: brew install clang-format
+
       - name: Lint
         run: make lint
 
@@ -75,6 +78,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
 
       - name: Lint
         run: make lint

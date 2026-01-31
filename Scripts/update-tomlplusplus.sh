@@ -52,6 +52,12 @@ if [[ -z "$LATEST_VERSION" ]]; then
     exit 1
 fi
 
+# Validate version format to prevent command injection
+if [[ ! "$LATEST_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: Unexpected version format: $LATEST_VERSION" >&2
+    exit 1
+fi
+
 echo "Latest toml++ version: $LATEST_VERSION"
 
 if [[ -n "$GITHUB_OUTPUT_PATH" ]]; then
