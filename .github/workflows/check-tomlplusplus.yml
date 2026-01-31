@@ -5,6 +5,9 @@ on:
     - cron: "0 0 * * 1" # Weekly on Monday at midnight UTC
   workflow_dispatch: # Allow manual trigger
 
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   check:
