@@ -224,17 +224,36 @@ decoder.limits = .unlimited
 This library bundles [toml++](https://github.com/marzer/tomlplusplus) as a single-header file. To update to the latest version:
 
 ```bash
-./scripts/update-tomlplusplus.sh
-swift test
-cd Tests/Integration && make test
+make update
+make test
 ```
 
 A GitHub Action runs weekly to check for toml++ updates and creates an issue when a new version is available.
+
+To check for updates without downloading:
+
+```bash
+make check
+```
 
 ### Running Tests
 
 ```bash
 make test  # runs unit tests + integration tests
+```
+
+### C/C++ Formatting
+
+Format the C/C++ bridge sources (requires `clang-format`):
+
+```bash
+make format-cpp
+```
+
+Verify formatting in CI or locally:
+
+```bash
+make check-format-cpp
 ```
 
 ## License
