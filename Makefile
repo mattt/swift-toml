@@ -26,11 +26,11 @@ test-integration:
 
 # Update toml++ to the latest version
 update:
-	./scripts/update-tomlplusplus.sh
+	./Scripts/update-tomlplusplus.sh
 
 # Check for toml++ updates without downloading
 check:
-	./scripts/update-tomlplusplus.sh --check
+	./Scripts/update-tomlplusplus.sh --check
 
 # Format Swift and C/C++ sources
 format: format-swift format-cpp

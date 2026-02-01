@@ -19,7 +19,7 @@ jobs:
 
       - name: Check for updates
         id: check
-        run: ./scripts/update-tomlplusplus.sh --check --github-output "$GITHUB_OUTPUT"
+        run: ./Scripts/update-tomlplusplus.sh --check --github-output "$GITHUB_OUTPUT"
 
       - name: Create issue if update available
         if: steps.check.outputs.update_available == 'true'
@@ -43,7 +43,7 @@ jobs:
           ## Update Instructions
 
           \`\`\`bash
-          ./scripts/update-tomlplusplus.sh
+          ./Scripts/update-tomlplusplus.sh
           swift test
           cd Tests/Integration && make test
           \`\`\`

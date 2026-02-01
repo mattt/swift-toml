@@ -1,6 +1,6 @@
 #!/bin/bash
 # Updates toml++ to the latest version from GitHub releases
-# Usage: ./scripts/update-tomlplusplus.sh [--check] [--github-output <path>]
+# Usage: ./Scripts/update-tomlplusplus.sh [--check] [--github-output <path>]
 
 set -euo pipefail
 
