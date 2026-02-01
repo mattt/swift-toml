@@ -45,11 +45,10 @@ jobs:
         with:
           go-version: "stable"
 
-      - name: Install clang-format
-        run: brew install clang-format
-
       - name: Lint
         run: make lint
+        env:
+          CLANG_FORMAT: xcrun clang-format
 
       - name: Test
         run: make test
@@ -78,12 +77,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
-
-      - name: Install clang-format
-        run: sudo apt-get update && sudo apt-get install -y clang-format
-
-      - name: Lint
-        run: make lint
 
       - name: Test
         run: make test
