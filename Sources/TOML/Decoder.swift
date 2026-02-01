@@ -222,11 +222,13 @@ public final class TOMLDecoder {
 
         guard result.success else {
             if let errorMsg = result.error_message {
-                throw TOMLDecodingError.invalidSyntax(
-                    line: Int(result.error_line),
-                    column: Int(result.error_column),
-                    message: String(cString: errorMsg)
-                )
+                let message = String(cString: errorMsg)
+                let line = Int(result.error_line)
+                let column = Int(result.error_column)
+                if line > 0 || column > 0 {
+                    throw TOMLDecodingError.invalidSyntax(line: line, column: column, message: message)
+                }
+                throw TOMLDecodingError.invalidData(message)
             }
             throw TOMLDecodingError.invalidData("Unknown parse error")
         }
