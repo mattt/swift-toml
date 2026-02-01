@@ -3,6 +3,7 @@
 #define NDEBUG 1
 #include "include/ctoml.h"
 #include "toml.hpp"
+#include <exception>
 #include <cstdlib>
 #include <cstring>
 #include <list>
@@ -71,7 +72,7 @@ struct CTomlTable
 
 static CTomlNode convert_table(const toml::table& table, CTomlTable* storage)
 {
-	CTomlNode result;
+	CTomlNode result{};
 	result.type = CTOML_TABLE;
 
 	size_t count = table.size();
@@ -93,7 +94,7 @@ static CTomlNode convert_table(const toml::table& table, CTomlTable* storage)
 
 static CTomlNode convert_array(const toml::array& arr, CTomlTable* storage)
 {
-	CTomlNode result;
+	CTomlNode result{};
 	result.type = CTOML_ARRAY;
 
 	size_t count					 = arr.size();
@@ -119,7 +120,7 @@ static CTomlNode convert_array(const toml::array& arr, CTomlTable* storage)
 
 static CTomlNode convert_node(const toml::node& node, CTomlTable* storage)
 {
-	CTomlNode result;
+	CTomlNode result{};
 	result.type = CTOML_NONE;
 
 	if (node.is_string())
@@ -189,7 +190,7 @@ extern "C"
 {
 	CTomlParseResult ctoml_parse(const char* input, size_t length)
 	{
-		CTomlParseResult result;
+		CTomlParseResult result{};
 		result.success		 = false;
 		result.error_message = nullptr;
 		result.error_line	 = 0;
