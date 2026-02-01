@@ -1,6 +1,10 @@
 #!/bin/bash
-# Updates toml++ to the latest version from GitHub releases
+# Updates toml++ to the latest version from GitHub releases.
 # Usage: ./Scripts/update-tomlplusplus.sh [--check] [--github-output <path>]
+#
+# Supply-chain note: This script downloads C++ header code from a third-party
+# GitHub repository. For CI, use --check only (no download). To reduce risk
+# when updating locally, pin to a specific tag and verify checksums if needed.
 
 set -euo pipefail
 
@@ -18,7 +22,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --github-output)
-            GITHUB_OUTPUT_PATH="${2:-}"
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                echo "Error: --github-output requires a path argument" >&2
+                exit 2
+            fi
+            GITHUB_OUTPUT_PATH="$2"
             shift 2
             ;;
         -*)
@@ -31,24 +39,36 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Get current version from toml.hpp
+# Get current version from toml.hpp (resilient: default to "unknown" if parsing fails)
 if [[ -f "$TOML_HPP" ]]; then
-    CURRENT_MAJOR=$(grep -o 'TOML_LIB_MAJOR[[:space:]]*[0-9]*' "$TOML_HPP" | grep -o '[0-9]*$' | head -1)
-    CURRENT_MINOR=$(grep -o 'TOML_LIB_MINOR[[:space:]]*[0-9]*' "$TOML_HPP" | grep -o '[0-9]*$' | head -1)
-    CURRENT_PATCH=$(grep -o 'TOML_LIB_PATCH[[:space:]]*[0-9]*' "$TOML_HPP" | grep -o '[0-9]*$' | head -1)
-    CURRENT_VERSION="v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
+    CURRENT_MAJOR=$(grep -o 'TOML_LIB_MAJOR[[:space:]]*[0-9]*' "$TOML_HPP" | grep -o '[0-9]*$' | head -1) || true
+    CURRENT_MINOR=$(grep -o 'TOML_LIB_MINOR[[:space:]]*[0-9]*' "$TOML_HPP" | grep -o '[0-9]*$' | head -1) || true
+    CURRENT_PATCH=$(grep -o 'TOML_LIB_PATCH[[:space:]]*[0-9]*' "$TOML_HPP" | grep -o '[0-9]*$' | head -1) || true
+    if [[ -n "${CURRENT_MAJOR:-}" && -n "${CURRENT_MINOR:-}" && -n "${CURRENT_PATCH:-}" ]]; then
+        CURRENT_VERSION="v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
+    else
+        CURRENT_VERSION="unknown"
+        echo "Warning: Could not parse version from toml.hpp (missing or unexpected format)" >&2
+    fi
     echo "Current toml++ version: $CURRENT_VERSION"
 else
     CURRENT_VERSION="none"
     echo "No existing toml.hpp found"
 fi
 
-# Get latest version from GitHub API
+# Get latest version from GitHub API (explicit error handling; prefer jq if available)
 echo "Checking for latest release..."
-LATEST_VERSION=$(curl -s https://api.github.com/repos/marzer/tomlplusplus/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-
-if [[ -z "$LATEST_VERSION" ]]; then
-    echo "Error: Failed to fetch latest version from GitHub"
+GITHUB_JSON=$(curl -sf https://api.github.com/repos/marzer/tomlplusplus/releases/latest) || {
+    echo "Error: Failed to fetch latest release from GitHub (network error or non-2xx response)" >&2
+    exit 1
+}
+if command -v jq &>/dev/null; then
+    LATEST_VERSION=$(printf '%s' "$GITHUB_JSON" | jq -r '.tag_name // empty')
+else
+    LATEST_VERSION=$(printf '%s' "$GITHUB_JSON" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+if [[ -z "${LATEST_VERSION:-}" ]]; then
+    echo "Error: Could not parse latest version from GitHub API response" >&2
     exit 1
 fi
 

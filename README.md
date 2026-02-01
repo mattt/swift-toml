@@ -253,7 +253,7 @@ make format-cpp
 Verify formatting in CI or locally:
 
 ```bash
-make check-format-cpp
+make lint-cpp
 ```
 
 ## License

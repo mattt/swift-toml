@@ -8,7 +8,7 @@
 #include <list>
 #include <new>
 #include <string>
-#include <typeinfo>
+#include <string_view>
 #include <vector>
 
 // Forward declaration
@@ -262,11 +262,26 @@ extern "C"
 
 	void ctoml_free_result(CTomlParseResult* result)
 	{
-		if (result && result->handle)
+		if (!result)
+		{
+			return;
+		}
+
+		if (result->handle)
 		{
 			delete result->handle;
 			result->handle = nullptr;
 		}
+
+		// Invalidate all other fields to avoid dangling pointers after free.
+		result->error_message = nullptr;
+		result->success		  = false;
+		result->error_line	  = 0;
+		result->error_column  = 0;
+
+		// Clear root node, which may contain pointers into freed storage.
+		std::memset(&result->root, 0, sizeof(result->root));
+		result->root.type = CTOML_NONE;
 	}
 
 } // extern "C"

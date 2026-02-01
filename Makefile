@@ -24,13 +24,14 @@ test-unit:
 test-integration:
 	cd Tests/Integration && make test
 
-# Update toml++ to the latest version
-update:
-	./Scripts/update-tomlplusplus.sh
-
 # Check for toml++ updates without downloading
 check:
 	./Scripts/update-tomlplusplus.sh --check
+
+
+# Update toml++ to the latest version
+update:
+	./Scripts/update-tomlplusplus.sh
 
 # Format Swift and C/C++ sources
 format: format-swift format-cpp

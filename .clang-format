@@ -190,7 +190,7 @@ StatementMacros:
   - TOML_PURE_INLINE_GETTER
   - TOML_RETURNS_BY_THROWING
 TabWidth: 4
-TypenameMacros:
+TypenameMacros: []
 UseCRLF: false
 UseTab: Always
 WhitespaceSensitiveMacros:

@@ -28,7 +28,11 @@ extern "C"
 		CTOML_TABLE
 	} CTomlNodeType;
 
-	_Static_assert(sizeof(CTomlNodeType) == 4, "CTomlNodeType must be 4 bytes for Swift interop");
+#if defined(__cplusplus)
+	static_assert(sizeof(CTomlNodeType) == 4, "CTomlNodeType must be 4 bytes for Swift interop");
+#else
+_Static_assert(sizeof(CTomlNodeType) == 4, "CTomlNodeType must be 4 bytes for Swift interop");
+#endif
 
 	// Date/Time structures
 	typedef struct
