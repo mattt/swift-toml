@@ -2,15 +2,18 @@
 # Updates toml++ to the latest version from GitHub releases.
 # Usage: ./Scripts/update-tomlplusplus.sh [--check] [--github-output <path>]
 #
-# Supply-chain note: This script downloads C++ header code from a third-party
-# GitHub repository. For CI, use --check only (no download). To reduce risk
-# when updating locally, pin to a specific tag and verify checksums if needed.
+# Supply-chain note:
+# This script downloads C++ header code from a third-party GitHub repository.
+# For CI, use --check only (no download).
+# To reduce risk when updating locally, 
+# pin to a specific tag and verify checksums if needed.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 TOML_HPP="$PROJECT_ROOT/Sources/CTomlPlusPlus/toml.hpp"
+TOMLPP_REPO="marzer/tomlplusplus"
 
 CHECK_ONLY=0
 GITHUB_OUTPUT_PATH=""
@@ -39,7 +42,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Get current version from toml.hpp (resilient: default to "unknown" if parsing fails)
+# Get current version from toml.hpp
 if [[ -f "$TOML_HPP" ]]; then
     CURRENT_MAJOR=$(grep -o 'TOML_LIB_MAJOR[[:space:]]*[0-9]*' "$TOML_HPP" | grep -o '[0-9]*$' | head -1) || true
     CURRENT_MINOR=$(grep -o 'TOML_LIB_MINOR[[:space:]]*[0-9]*' "$TOML_HPP" | grep -o '[0-9]*$' | head -1) || true
@@ -56,9 +59,9 @@ else
     echo "No existing toml.hpp found"
 fi
 
-# Get latest version from GitHub API (explicit error handling; prefer jq if available)
+# Get latest version from GitHub API
 echo "Checking for latest release..."
-GITHUB_JSON=$(curl -sf https://api.github.com/repos/marzer/tomlplusplus/releases/latest) || {
+GITHUB_JSON=$(curl -sf "https://api.github.com/repos/${TOMLPP_REPO}/releases/latest") || {
     echo "Error: Failed to fetch latest release from GitHub (network error or non-2xx response)" >&2
     exit 1
 }
@@ -104,24 +107,23 @@ fi
 
 # Download the latest single-header version
 echo "Downloading toml++ $LATEST_VERSION..."
-DOWNLOAD_URL="https://raw.githubusercontent.com/marzer/tomlplusplus/${LATEST_VERSION}/toml.hpp"
+DOWNLOAD_URL="https://raw.githubusercontent.com/${TOMLPP_REPO}/${LATEST_VERSION}/toml.hpp"
+TOML_TMP="$TOML_HPP.tmp"
+trap 'rm -f "$TOML_TMP"' EXIT
 
-if curl -fL "$DOWNLOAD_URL" -o "$TOML_HPP.tmp"; then
-    mv "$TOML_HPP.tmp" "$TOML_HPP"
-    echo "Successfully updated toml++ to $LATEST_VERSION"
-
-    # Verify the download
-    if grep -q "TOML_LIB_MAJOR" "$TOML_HPP"; then
-        echo "Verification passed"
-    else
-        echo "Warning: Downloaded file may be corrupted"
-        exit 1
-    fi
-else
-    echo "Error: Failed to download toml++"
-    rm -f "$TOML_HPP.tmp"
+if ! curl -fL "$DOWNLOAD_URL" -o "$TOML_TMP"; then
+    echo "Error: Failed to download toml++" >&2
     exit 1
 fi
+
+if ! grep -q "TOML_LIB_MAJOR" "$TOML_TMP"; then
+    echo "Error: Downloaded file failed verification (missing TOML_LIB_MAJOR)" >&2
+    exit 1
+fi
+
+mv "$TOML_TMP" "$TOML_HPP"
+trap - EXIT
+echo "Successfully updated toml++ to $LATEST_VERSION"
 
 echo ""
 echo "Next steps:"
