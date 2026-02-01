@@ -38,7 +38,7 @@ Add the following to your `Package.swift` file:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/mattt/swift-toml.git", from: "1.0.0")
+    .package(url: "https://github.com/mattt/swift-toml.git", from: "2.0.0")
 ]
 ```
 
@@ -50,6 +50,11 @@ Then add the dependency to your target:
     dependencies: ["TOML"]
 )
 ```
+
+> [!NOTE]
+> When migrating from 1.0.0 to 2.0.0, 
+> you no longer need to set the C++ interoperability mode
+> (`.interoperabilityMode(.Cxx)`).
 
 ## Usage
 
