@@ -346,6 +346,8 @@ public final class TOMLDecoder {
         case CTOML_NONE:
             return .string("")
 
+        // We can't use `@unknown default` here because
+        // the C enum imports as a plain enum and exhaustiveness isn't tracked.
         default:
             return .string("")
         }
