@@ -1,5 +1,10 @@
 # Swift TOML
 
+[![Platforms](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fmattt%2Fswift-toml%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/mattt/swift-toml)
+[![Swift-versions](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fmattt%2Fswift-toml%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/mattt/swift-toml)
+[![CI](https://github.com/mattt/swift-toml/actions/workflows/ci.yml/badge.svg)](https://github.com/mattt/swift-toml/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/mattt/swift-toml.svg)](LICENSE.md)
+
 A Swift implementation of [TOML](https://toml.io) (Tom's Obvious, Minimal Language),
 a human-readable configuration file format. 
 Built on [toml++](https://github.com/marzer/tomlplusplus)
@@ -42,10 +47,7 @@ Then add the dependency to your target:
 ```swift
 .target(
     name: "YourTarget",
-    dependencies: ["TOML"],
-    swiftSettings: [
-        .interoperabilityMode(.Cxx)
-    ]
+    dependencies: ["TOML"]
 )
 ```
 
@@ -213,6 +215,45 @@ For trusted input where you need no restrictions:
 
 ```swift
 decoder.limits = .unlimited
+```
+
+## Development
+
+### Updating toml++
+
+This library bundles [toml++](https://github.com/marzer/tomlplusplus) as a single-header file. To update to the latest version:
+
+```bash
+make update
+make test
+```
+
+A GitHub Action runs weekly to check for toml++ updates and creates an issue when a new version is available.
+
+To check for updates without downloading:
+
+```bash
+make check
+```
+
+### Running Tests
+
+```bash
+make test  # runs unit tests + integration tests
+```
+
+### C/C++ Formatting
+
+Format the C/C++ bridge sources (requires `clang-format`):
+
+```bash
+make format-cpp
+```
+
+Verify formatting in CI or locally:
+
+```bash
+make lint-cpp
 ```
 
 ## License

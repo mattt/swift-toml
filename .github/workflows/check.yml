@@ -1,0 +1,72 @@
+name: Check toml++ Updates
+
+on:
+  schedule:
+    - cron: "0 0 * * 1" # Weekly on Monday at midnight UTC
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Check for toml++ Updates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for updates
+        id: check
+        run: ./Scripts/update-tomlplusplus.sh --check --github-output "$GITHUB_OUTPUT"
+
+      - name: Create issue if update available
+        if: steps.check.outputs.update_available == 'true'
+        env:
+          CURRENT_VERSION: ${{ steps.check.outputs.current }}
+          LATEST_VERSION: ${{ steps.check.outputs.latest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Check if an issue already exists for this version
+          EXISTING=$(gh issue list --label dependencies --state open --search "toml++ $LATEST_VERSION" --json number --jq 'length')
+
+          if [ "$EXISTING" = "0" ]; then
+            gh issue create \
+              --title "Update toml++ from $CURRENT_VERSION to $LATEST_VERSION" \
+              --label "dependencies" \
+              --body "A new version of [toml++](https://github.com/marzer/tomlplusplus) is available.
+
+          **Current version:** $CURRENT_VERSION
+          **Latest version:** $LATEST_VERSION
+
+          ## Update Instructions
+
+          \`\`\`bash
+          ./Scripts/update-tomlplusplus.sh
+          swift test
+          cd Tests/Integration && make test
+          \`\`\`
+
+          See [toml++ releases](https://github.com/marzer/tomlplusplus/releases) for changelog."
+          fi
+
+      - name: Summary
+        env:
+          CURRENT_VERSION: ${{ steps.check.outputs.current }}
+          LATEST_VERSION: ${{ steps.check.outputs.latest }}
+          UPDATE_AVAILABLE: ${{ steps.check.outputs.update_available }}
+        run: |
+          {
+            echo "## toml++ Version Check"
+            echo ""
+            echo "**Current version:** $CURRENT_VERSION"
+            echo "**Latest version:** $LATEST_VERSION"
+            if [ "$UPDATE_AVAILABLE" == "true" ]; then
+              echo ""
+              echo ":warning: **Update available!**"
+            else
+              echo ""
+              echo ":white_check_mark: **Up to date**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

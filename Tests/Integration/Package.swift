@@ -16,21 +16,14 @@ let package = Package(
             dependencies: [
                 .product(name: "TOML", package: "swift-toml")
             ],
-            path: "Sources/toml-decoder",
-            swiftSettings: [
-                .interoperabilityMode(.Cxx)
-            ]
+            path: "Sources/toml-decoder"
         ),
         .executableTarget(
             name: "toml-encoder",
             dependencies: [
                 .product(name: "TOML", package: "swift-toml")
             ],
-            path: "Sources/toml-encoder",
-            swiftSettings: [
-                .interoperabilityMode(.Cxx)
-            ]
+            path: "Sources/toml-encoder"
         ),
-    ],
-    cxxLanguageStandard: .cxx17
+    ]
 )

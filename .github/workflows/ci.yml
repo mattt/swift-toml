@@ -40,19 +40,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-swift-${{ matrix.swift }}-spm-
 
-      - name: Build
-        run: swift build -v
-
-      - name: Test
-        run: swift test -v
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
 
-      - name: Integration Tests
-        working-directory: Tests/Integration
+      - name: Lint
+        run: make lint
+        env:
+          CLANG_FORMAT: xcrun clang-format
+
+      - name: Test
         run: make test
 
   test-linux:
@@ -75,17 +73,10 @@ jobs:
         with:
           toolchain: ${{ matrix.swift-version }}
 
-      - name: Build
-        run: swift build -v
-
-      - name: Test
-        run: swift test -v
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
 
-      - name: Integration Tests
-        working-directory: Tests/Integration
+      - name: Test
         run: make test

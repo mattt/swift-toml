@@ -215,18 +215,20 @@ public final class TOMLDecoder {
     // MARK: - Private
 
     private func parseToValue(_ string: String) throws -> TOMLValue {
-        let cxxString = std.string(string)
-        let result = tomlpp.parse(cxxString)
+        var result = string.withCString { cString in
+            ctoml_parse(cString, string.utf8.count)
+        }
+        defer { ctoml_free_result(&result) }
 
         guard result.success else {
-            let errorOpt = result.error
-            if Bool(fromCxx: errorOpt) {
-                let error = errorOpt.pointee
-                throw TOMLDecodingError.invalidSyntax(
-                    line: Int(error.line),
-                    column: Int(error.column),
-                    message: String(error.description)
-                )
+            if let errorMsg = result.error_message {
+                let message = String(cString: errorMsg)
+                let line = Int(result.error_line)
+                let column = Int(result.error_column)
+                if line > 0 || column > 0 {
+                    throw TOMLDecodingError.invalidSyntax(line: line, column: column, message: message)
+                }
+                throw TOMLDecodingError.invalidData(message)
             }
             throw TOMLDecodingError.invalidData("Unknown parse error")
         }
@@ -234,14 +236,22 @@ public final class TOMLDecoder {
         return try convertNode(result.root, depth: 0)
     }
 
-    private func convertNode(_ node: tomlpp.Node, depth: Int) throws -> TOMLValue {
+    private func decodeCTomlString(_ strData: CTomlString) -> String {
+        if let data = strData.data {
+            let buffer = UnsafeRawBufferPointer(start: data, count: strData.length)
+            return String(decoding: buffer, as: UTF8.self)
+        }
+        return ""
+    }
+
+    private func convertNode(_ node: CTomlNode, depth: Int) throws -> TOMLValue {
         guard depth < limits.maxDepth else {
             throw TOMLDecodingError.invalidData("Maximum nesting depth of \(limits.maxDepth) exceeded")
         }
 
-        switch node.getType() {
-        case .String:
-            let str = String(node.getString())
+        switch node.type {
+        case CTOML_STRING:
+            let str = decodeCTomlString(node.data.string_value)
             guard str.count <= limits.maxStringLength else {
                 throw TOMLDecodingError.invalidData(
                     "String exceeds maximum length of \(limits.maxStringLength) characters"
@@ -249,17 +259,17 @@ public final class TOMLDecoder {
             }
             return .string(str)
 
-        case .Integer:
-            return .integer(node.getInteger())
+        case CTOML_INTEGER:
+            return .integer(node.data.integer_value)
 
-        case .Float:
-            return .float(node.getFloat())
+        case CTOML_FLOAT:
+            return .float(node.data.float_value)
 
-        case .Boolean:
-            return .boolean(node.getBoolean())
+        case CTOML_BOOLEAN:
+            return .boolean(node.data.boolean_value)
 
-        case .Date:
-            let d = node.getDate()
+        case CTOML_DATE:
+            let d = node.data.date_value
             return .localDate(
                 LocalDate(
                     year: Int(d.year),
@@ -268,8 +278,8 @@ public final class TOMLDecoder {
                 )
             )
 
-        case .Time:
-            let t = node.getTime()
+        case CTOML_TIME:
+            let t = node.data.time_value
             return .localTime(
                 LocalTime(
                     hour: Int(t.hour),
@@ -279,9 +289,9 @@ public final class TOMLDecoder {
                 )
             )
 
-        case .DateTime:
-            let dt = node.getDateTime()
-            if dt.hasOffset {
+        case CTOML_DATETIME:
+            let dt = node.data.datetime_value
+            if dt.has_offset {
                 var components = DateComponents()
                 components.year = Int(dt.date.year)
                 components.month = Int(dt.date.month)
@@ -290,7 +300,7 @@ public final class TOMLDecoder {
                 components.minute = Int(dt.time.minute)
                 components.second = Int(dt.time.second)
                 components.nanosecond = Int(dt.time.nanosecond)
-                components.timeZone = TimeZone(secondsFromGMT: Int(dt.offsetMinutes) * 60)
+                components.timeZone = TimeZone(secondsFromGMT: Int(dt.offset_minutes) * 60)
 
                 if let date = Calendar(identifier: .gregorian).date(from: components) {
                     return .offsetDateTime(date)
@@ -308,37 +318,39 @@ public final class TOMLDecoder {
                 )
             )
 
-        case .Array:
-            let count = node.getArraySize()
+        case CTOML_ARRAY:
+            let count = node.data.array_value.count
             guard count <= limits.maxArrayLength else {
                 throw TOMLDecodingError.invalidData("Array exceeds maximum length of \(limits.maxArrayLength) elements")
             }
             var values: [TOMLValue] = []
-            for i in 0 ..< count {
-                let element = node.getArrayElement(i)
-                try values.append(convertNode(element, depth: depth + 1))
+            if let elements = node.data.array_value.elements {
+                for i in 0 ..< count {
+                    try values.append(convertNode(elements[i], depth: depth + 1))
+                }
             }
             return .array(values)
 
-        case .Table:
-            let count = node.getTableSize()
+        case CTOML_TABLE:
+            let count = node.data.table_value.count
             guard count <= limits.maxTableKeys else {
                 throw TOMLDecodingError.invalidData("Table exceeds maximum of \(limits.maxTableKeys) keys")
             }
             var dict: [String: TOMLValue] = [:]
-            for i in 0 ..< count {
-                let key = String(node.getTableKey(i))
-                let valueOpt = node.getTableValue(std.string(key))
-                if Bool(fromCxx: valueOpt) {
-                    dict[key] = try convertNode(valueOpt.pointee, depth: depth + 1)
+            if let keys = node.data.table_value.keys, let tableValues = node.data.table_value.values {
+                for i in 0 ..< count {
+                    let key = decodeCTomlString(keys[i])
+                    dict[key] = try convertNode(tableValues[i], depth: depth + 1)
                 }
             }
             return .table(dict)
 
-        case .None:
+        case CTOML_NONE:
             return .string("")
 
-        @unknown default:
+        // We can't use `@unknown default` here because
+        // the C enum imports as a plain enum and exhaustiveness isn't tracked.
+        default:
             return .string("")
         }
     }
