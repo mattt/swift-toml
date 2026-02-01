@@ -13,8 +13,8 @@ extern "C"
 	// Opaque handle type (hides C++ implementation)
 	typedef struct CTomlTable CTomlTable;
 
-	// Node types enum
-	typedef enum __attribute__((enum_extensibility(open))) CTomlNodeType : int32_t
+	// Node types enum (plain C; fixed size asserted for Swift interop)
+	typedef enum
 	{
 		CTOML_NONE = 0,
 		CTOML_STRING,
@@ -27,6 +27,8 @@ extern "C"
 		CTOML_ARRAY,
 		CTOML_TABLE
 	} CTomlNodeType;
+
+	_Static_assert(sizeof(CTomlNodeType) == 4, "CTomlNodeType must be 4 bytes for Swift interop");
 
 	// Date/Time structures
 	typedef struct

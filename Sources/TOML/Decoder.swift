@@ -240,7 +240,7 @@ public final class TOMLDecoder {
         }
 
         switch node.type {
-        case .CTOML_STRING:
+        case CTOML_STRING:
             let strData = node.data.string_value
             let str: String
             if let data = strData.data {
@@ -256,16 +256,16 @@ public final class TOMLDecoder {
             }
             return .string(str)
 
-        case .CTOML_INTEGER:
+        case CTOML_INTEGER:
             return .integer(node.data.integer_value)
 
-        case .CTOML_FLOAT:
+        case CTOML_FLOAT:
             return .float(node.data.float_value)
 
-        case .CTOML_BOOLEAN:
+        case CTOML_BOOLEAN:
             return .boolean(node.data.boolean_value)
 
-        case .CTOML_DATE:
+        case CTOML_DATE:
             let d = node.data.date_value
             return .localDate(
                 LocalDate(
@@ -275,7 +275,7 @@ public final class TOMLDecoder {
                 )
             )
 
-        case .CTOML_TIME:
+        case CTOML_TIME:
             let t = node.data.time_value
             return .localTime(
                 LocalTime(
@@ -286,7 +286,7 @@ public final class TOMLDecoder {
                 )
             )
 
-        case .CTOML_DATETIME:
+        case CTOML_DATETIME:
             let dt = node.data.datetime_value
             if dt.has_offset {
                 var components = DateComponents()
@@ -315,7 +315,7 @@ public final class TOMLDecoder {
                 )
             )
 
-        case .CTOML_ARRAY:
+        case CTOML_ARRAY:
             let count = node.data.array_value.count
             guard count <= limits.maxArrayLength else {
                 throw TOMLDecodingError.invalidData("Array exceeds maximum length of \(limits.maxArrayLength) elements")
@@ -328,7 +328,7 @@ public final class TOMLDecoder {
             }
             return .array(values)
 
-        case .CTOML_TABLE:
+        case CTOML_TABLE:
             let count = node.data.table_value.count
             guard count <= limits.maxTableKeys else {
                 throw TOMLDecodingError.invalidData("Table exceeds maximum of \(limits.maxTableKeys) keys")
@@ -349,10 +349,10 @@ public final class TOMLDecoder {
             }
             return .table(dict)
 
-        case .CTOML_NONE:
+        case CTOML_NONE:
             return .string("")
 
-        @unknown default:
+        default:
             return .string("")
         }
     }
