@@ -9,7 +9,7 @@ on:
 jobs:
   test-macos:
     name: Swift ${{ matrix.swift }} on macOS ${{ matrix.macos }} with Xcode ${{ matrix.xcode }}
-    runs-on: macos-${{ matrix.macos }}
+    runs-on: ${{ matrix.runs-on }}
     env:
       DEVELOPER_DIR: "/Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer"
     strategy:
@@ -19,29 +19,41 @@ jobs:
           - swift: "6.0"
             xcode: "16.0"
             macos: "15"
+            runs-on: macos-15
           - swift: "6.1"
             xcode: "16.3"
             macos: "15"
+            runs-on: macos-15
           - swift: "6.2"
             xcode: "26.0"
             macos: "26"
+            runs-on: macos-26
+          - swift: "6.3"
+            xcode: "26.4"
+            macos: "26"
+            runs-on: macos-26
+          # The xcode-27 image is a public preview that runs macOS 27.
+          - swift: "6.4"
+            xcode: "27.0"
+            macos: "27"
+            runs-on: xcode-27
     timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cache Swift Package Manager dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/org.swift.swiftpm
             .build
-          key: ${{ runner.os }}-swift-${{ matrix.swift }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-swift-${{ matrix.swift }}-spm-${{ hashFiles('Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-swift-${{ matrix.swift }}-spm-
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: "stable"
 
@@ -50,33 +62,42 @@ jobs:
         env:
           CLANG_FORMAT: xcrun clang-format
 
+      - name: Build
+        run: make build
+
       - name: Test
         run: make test
 
   test-linux:
-    name: Swift ${{ matrix.swift-version }} on Linux
+    name: Swift ${{ matrix.swift }} on Linux
     runs-on: ubuntu-latest
+    # The official images pin the toolchain and the distribution together,
+    # so changes to the ubuntu-latest image do not affect the build.
+    container: swift:${{ matrix.swift }}-noble
     strategy:
       fail-fast: false
       matrix:
-        swift-version:
-          - "6.0.3"
-          - "6.1.3"
-          - "6.2.3"
+        swift:
+          - "6.0"
+          - "6.1"
+          - "6.2"
+          - "6.3"
+          - "6.4"
     timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup Swift
-        uses: vapor/swiftly-action@v0.2
-        with:
-          toolchain: ${{ matrix.swift-version }}
+      - name: Install make
+        run: apt-get update && apt-get install -y --no-install-recommends make
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: "stable"
+
+      - name: Build
+        run: make build
 
       - name: Test
         run: make test
