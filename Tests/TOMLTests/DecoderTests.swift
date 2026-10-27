@@ -63,7 +63,6 @@ struct TOMLDecoderTests {
             container = "https://example.com/"
             """
 
-
         let config = try TOMLDecoder().decode(Config.self, from: toml)
         #expect(config.container.url.absoluteString == "https://example.com/")
     }
@@ -79,6 +78,91 @@ struct TOMLDecoderTests {
 
         let config = try TOMLDecoder().decode(Config.self, from: toml)
         #expect(config.urls == [URL(string: "https://example.com/")!, URL(string: "https://swift.org/")!])
+    }
+
+    @Test func decodeURLFromTable() throws {
+        // TOMLEncoder writes this table for a URL by default,
+        // using URL's own Encodable conformance.
+        let toml = """
+            [url]
+            relative = "https://example.com/"
+            """
+
+        struct Config: Codable {
+            let url: URL
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+        #expect(config.url == URL(string: "https://example.com/"))
+    }
+
+    @Test func decodeInvalidURLString() throws {
+        let toml = """
+            url = ""
+            """
+
+        struct Config: Codable {
+            let url: URL
+        }
+
+        do {
+            _ = try TOMLDecoder().decode(Config.self, from: toml)
+            Issue.record("Expected a decoding error")
+        } catch DecodingError.dataCorrupted(let context) {
+            #expect(context.codingPath.map(\.stringValue) == ["url"])
+            #expect(context.debugDescription == "Invalid URL string: \"\"")
+        }
+    }
+
+    @Test func decodeInvalidURLStringInArray() throws {
+        let toml = """
+            urls = ["https://example.com/", ""]
+            """
+
+        struct Config: Codable {
+            let urls: [URL]
+        }
+
+        do {
+            _ = try TOMLDecoder().decode(Config.self, from: toml)
+            Issue.record("Expected a decoding error")
+        } catch DecodingError.dataCorrupted(let context) {
+            #expect(context.codingPath.last?.intValue == 1)
+        }
+    }
+
+    @Test func decodeURLTypeMismatchInArray() throws {
+        let toml = """
+            urls = [1, "https://example.com/"]
+            """
+
+        struct Config: Codable {
+            let urls: [URL]
+        }
+
+        do {
+            _ = try TOMLDecoder().decode(Config.self, from: toml)
+            Issue.record("Expected a decoding error")
+        } catch DecodingError.typeMismatch(_, let context) {
+            #expect(context.codingPath.last?.intValue == 0)
+        }
+    }
+
+    @Test func typeMismatchInArrayReportsElementIndex() throws {
+        let toml = """
+            numbers = [1, "two", 3]
+            """
+
+        struct Config: Codable {
+            let numbers: [Int]
+        }
+
+        do {
+            _ = try TOMLDecoder().decode(Config.self, from: toml)
+            Issue.record("Expected a decoding error")
+        } catch DecodingError.typeMismatch(_, let context) {
+            #expect(context.codingPath.last?.intValue == 1)
+        }
     }
 
     @Test func decodeAllIntegerTypes() throws {

@@ -102,8 +102,31 @@ struct EncoderTests {
         }
         let value = URLs(url: URL(string: "https://example.com/")!)
         let encoder = TOMLEncoder()
+        encoder.urlEncodingStrategy = .absoluteString
         let toml = try encoder.encodeToString(value)
         #expect(toml.contains(#"url = "https://example.com/""#))
+    }
+
+    @Test func encodeURLDeferredToURLByDefault() throws {
+        struct URLs: Codable {
+            let url: URL
+        }
+        let value = URLs(url: URL(string: "https://example.com/")!)
+        let toml = try TOMLEncoder().encodeToString(value)
+        #expect(toml.contains(#"relative = "https://example.com/""#))
+        #expect(!toml.contains(#"url = "https://example.com/""#))
+    }
+
+    @Test func encodeRelativeURLAsAbsoluteString() throws {
+        struct URLs: Codable {
+            let url: URL
+        }
+        let base = URL(string: "https://example.com/docs/")!
+        let value = URLs(url: URL(string: "guide", relativeTo: base)!)
+        let encoder = TOMLEncoder()
+        encoder.urlEncodingStrategy = .absoluteString
+        let toml = try encoder.encodeToString(value)
+        #expect(toml.contains(#"url = "https://example.com/docs/guide""#))
     }
 
     // MARK: - String Escaping

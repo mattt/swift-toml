@@ -41,6 +41,14 @@ import Foundation
 /// let decoder = TOMLDecoder()
 /// decoder.keyDecodingStrategy = .convertFromSnakeCase
 /// ```
+///
+/// ## URL Decoding
+///
+/// The decoder reads a `URL` from either form that ``TOMLEncoder`` writes:
+/// a string, such as `url = "https://example.com/"`,
+/// or the table that `URL`'s own `Encodable` conformance produces.
+/// A string that `URL(string:)` can't parse throws
+/// `DecodingError.dataCorrupted`.
 public final class TOMLDecoder {
 
     // MARK: - Date Decoding Strategy
@@ -487,6 +495,23 @@ private func valueTypeName(_ value: TOMLValue) -> String {
     }
 }
 
+/// Creates a URL from a TOML string.
+///
+/// The containers call this only for string values.
+/// Other values go to `URL(from:)`,
+/// which reads the table that `URL`'s own `Encodable` conformance writes.
+private func decodeURL(from string: String, codingPath: [any CodingKey]) throws -> URL {
+    guard let url = URL(string: string) else {
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: codingPath,
+                debugDescription: "Invalid URL string: \"\(string)\""
+            )
+        )
+    }
+    return url
+}
+
 // MARK: - Keyed Decoding Container
 
 private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContainerProtocol {
@@ -627,19 +652,8 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
             }
             return t as! T
         }
-        if type == URL.self {
-            guard case .string(let s) = value else {
-                throw typeMismatchError(type, value: value, key: key)
-            }
-            guard let u = URL(string: s) else {
-                throw DecodingError.dataCorrupted(
-                    .init(
-                        codingPath: codingPath + [key],
-                        debugDescription: "Could not decode \(s) as URL"
-                    )
-                )
-            }
-            return u as! T
+        if type == URL.self, case .string(let string) = value {
+            return try decodeURL(from: string, codingPath: codingPath + [key]) as! T
         }
 
         let decoder = _TOMLDecoder(
@@ -891,16 +905,11 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
             }
             return t as! T
         }
-        if type == URL.self {
-            guard case .string(let s) = value else {
-                throw typeMismatchError(type, value: value)
-            }
-            guard let u = URL(string: s) else {
-                throw DecodingError.dataCorrupted(
-                    .init(codingPath: codingPath, debugDescription: "Could not decode \(s) as URL")
-                )
-            }
-            return u as! T
+        if type == URL.self, case .string(let string) = value {
+            return try decodeURL(
+                from: string,
+                codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)]
+            ) as! T
         }
 
         let decoder = _TOMLDecoder(
@@ -998,7 +1007,7 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
         DecodingError.typeMismatch(
             type,
             DecodingError.Context(
-                codingPath: codingPath + [TOMLCodingKey(index: currentIndex)],
+                codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
                 debugDescription: "Expected \(type), found \(valueTypeName(value))"
             )
         )
@@ -1108,16 +1117,8 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
             }
             return t as! T
         }
-        if type == URL.self {
-            guard case .string(let s) = value else {
-                throw typeMismatchError(type)
-            }
-            guard let u = URL(string: s) else {
-                throw DecodingError.dataCorrupted(
-                    .init(codingPath: codingPath, debugDescription: "Could not decode \(s) as URL")
-                )
-            }
-            return u as! T
+        if type == URL.self, case .string(let string) = value {
+            return try decodeURL(from: string, codingPath: codingPath) as! T
         }
 
         let decoder = _TOMLDecoder(
