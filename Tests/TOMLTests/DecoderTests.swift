@@ -98,7 +98,7 @@ struct TOMLDecoderTests {
 
     @Test func decodeInvalidURLString() throws {
         let toml = """
-            url = ""
+            url = "http://[::1"
             """
 
         struct Config: Codable {
@@ -110,13 +110,13 @@ struct TOMLDecoderTests {
             Issue.record("Expected a decoding error")
         } catch DecodingError.dataCorrupted(let context) {
             #expect(context.codingPath.map(\.stringValue) == ["url"])
-            #expect(context.debugDescription == "Invalid URL string: \"\"")
+            #expect(context.debugDescription == "Invalid URL string: \"http://[::1\"")
         }
     }
 
     @Test func decodeInvalidURLStringInArray() throws {
         let toml = """
-            urls = ["https://example.com/", ""]
+            urls = ["https://example.com/", "http://[::1"]
             """
 
         struct Config: Codable {
