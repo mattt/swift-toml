@@ -38,6 +38,15 @@ import Foundation
 /// encoder.keyEncodingStrategy = .convertToSnakeCase
 /// ```
 ///
+/// ## URL Encoding
+///
+/// Use ``URLEncodingStrategy`` to encode `URL` values as strings:
+///
+/// ```swift
+/// let encoder = TOMLEncoder()
+/// encoder.urlEncodingStrategy = .absoluteString
+/// ```
+///
 /// ## Output Formatting
 ///
 /// Control the output format with ``OutputFormatting``:
@@ -98,6 +107,29 @@ public final class TOMLEncoder {
         case convertToSnakeCase
     }
 
+    // MARK: - URL Encoding Strategy
+
+    /// The strategy used when encoding `URL` values.
+    ///
+    /// ``TOMLDecoder`` reads URLs written with either strategy.
+    public enum URLEncodingStrategy: Sendable {
+        /// Encode URLs with their own `Encodable` implementation.
+        ///
+        /// Foundation writes a table with a `relative` string
+        /// and, for a URL that has one, a `base` URL.
+        /// This is the default strategy.
+        case deferredToURL
+
+        /// Encode URLs as strings, using their absolute string.
+        ///
+        /// A relative URL is resolved against its base URL,
+        /// so decoding the string produces an absolute URL
+        /// that has no base URL.
+        ///
+        /// Example: `url = "https://example.com/"`
+        case absoluteString
+    }
+
     // MARK: - Output Formatting
 
     /// Options for formatting the encoded TOML output.
@@ -126,6 +158,9 @@ public final class TOMLEncoder {
 
     /// The strategy used when encoding keys.
     public var keyEncodingStrategy: KeyEncodingStrategy = .useDefaultKeys
+
+    /// The strategy used when encoding `URL` values.
+    public var urlEncodingStrategy: URLEncodingStrategy = .deferredToURL
 
     /// The output formatting options.
     public var outputFormatting: OutputFormatting = []
@@ -165,6 +200,7 @@ public final class TOMLEncoder {
             options: EncodingOptions(
                 dateEncodingStrategy: dateEncodingStrategy,
                 keyEncodingStrategy: keyEncodingStrategy,
+                urlEncodingStrategy: urlEncodingStrategy,
                 outputFormatting: outputFormatting
             )
         )
@@ -373,6 +409,7 @@ public enum TOMLEncodingError: Error, CustomStringConvertible, Sendable {
 struct EncodingOptions {
     let dateEncodingStrategy: TOMLEncoder.DateEncodingStrategy
     let keyEncodingStrategy: TOMLEncoder.KeyEncodingStrategy
+    let urlEncodingStrategy: TOMLEncoder.URLEncodingStrategy
     let outputFormatting: TOMLEncoder.OutputFormatting
 }
 
@@ -499,6 +536,9 @@ private extension _TOMLEncoder {
         }
         if let localTime = value as? LocalTime {
             return .localTime(localTime)
+        }
+        if let url = value as? URL, options.urlEncodingStrategy == .absoluteString {
+            return .string(url.absoluteString)
         }
 
         let encoder = _TOMLEncoder(codingPath: codingPath, userInfo: userInfo, options: options)

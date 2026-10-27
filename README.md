@@ -193,16 +193,19 @@ let user = try decoder.decode(User.self, from: toml)
 
 ### Encoding Strategies
 
-Control how dates and keys are encoded:
+Control how dates, keys, and URLs are encoded:
 
 ```swift
 let encoder = TOMLEncoder()
 encoder.dateEncodingStrategy = .localDateTime
 encoder.keyEncodingStrategy = .convertToSnakeCase
+encoder.urlEncodingStrategy = .absoluteString
 encoder.outputFormatting = .sortedKeys
 
 let data = try encoder.encode(myValue)
 ```
+
+By default, `URL` values use their own `Encodable` conformance, which writes a table with a `relative` key. Set `urlEncodingStrategy` to `.absoluteString` to write a string, such as `url = "https://example.com/"`. The decoder reads both forms.
 
 ### Decoding Limits
 

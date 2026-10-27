@@ -22,4 +22,25 @@ struct RoundTripTests {
 
         #expect(original == decoded)
     }
+
+    @Test(arguments: [TOMLEncoder.URLEncodingStrategy.deferredToURL, .absoluteString])
+    func urls(strategy: TOMLEncoder.URLEncodingStrategy) throws {
+        struct Config: Codable, Equatable {
+            let homepage: URL
+            let mirrors: [URL]
+        }
+
+        let original = Config(
+            homepage: URL(string: "https://example.com/")!,
+            mirrors: [URL(string: "https://a.example.com/")!, URL(string: "https://b.example.com/")!]
+        )
+
+        let encoder = TOMLEncoder()
+        encoder.urlEncodingStrategy = strategy
+        let encoded = try encoder.encode(original)
+
+        let decoded = try TOMLDecoder().decode(Config.self, from: encoded)
+
+        #expect(original == decoded)
+    }
 }
