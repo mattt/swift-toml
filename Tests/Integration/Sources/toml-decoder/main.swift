@@ -5,14 +5,11 @@ import TOML
 struct TOMLDecoderCLI {
     static func main() {
         do {
+            // Pass the raw bytes to the decoder, as a library user would,
+            // so that the test covers the decoder's UTF-8 handling.
             let input = FileHandle.standardInput.readDataToEndOfFile()
-            guard let tomlString = String(data: input, encoding: .utf8) else {
-                FileHandle.standardError.write(Data("Error: Invalid UTF-8 input\n".utf8))
-                exit(1)
-            }
-
             let decoder = TOMLDecoder()
-            let value = try decoder.decode(TaggedValue.self, from: tomlString)
+            let value = try decoder.decode(TaggedValue.self, from: input)
             let json = value.toJSON()
             print(json)
         } catch {
