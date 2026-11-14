@@ -4,7 +4,10 @@ This subpackage contains CLI tools for running the [toml-test](https://github.co
 
 ## Prerequisites
 
-- Go (for running toml-test)
+- Go 1.27 or later (for running toml-test)
+
+The Makefile pins the toml-test version in `TOML_TEST_VERSION`
+and runs the tests for the TOML version in `TOML_VERSION` (default: `1.0.0`).
 
 ## Usage
 
@@ -21,7 +24,8 @@ make clean        # clean build artifacts
 
 ### Decoder
 
-Reads TOML from stdin and outputs tagged JSON:
+Reads TOML bytes from stdin, decodes them with `TOMLDecoder.decode(_:from:)` for `Data`,
+and outputs tagged JSON:
 
 ```bash
 echo 'name = "test"' | ./.build/debug/toml-decoder
@@ -39,14 +43,22 @@ echo '{"name":{"type":"string","value":"test"}}' | ./.build/debug/toml-encoder
 
 ## Options
 
+Run the tests for another TOML version:
+
+```bash
+make TOML_VERSION=1.1.0
+```
+
 Skip specific tests:
 
 ```bash
-go run github.com/toml-lang/toml-test/cmd/toml-test@latest -skip 'valid/float/inf-and-nan' ./.build/debug/toml-decoder
+go run github.com/toml-lang/toml-test/v2/cmd/toml-test@<version> test -decoder=./.build/debug/toml-decoder -skip='valid/float/inf-and-nan'
 ```
 
 Run specific tests:
 
 ```bash
-go run github.com/toml-lang/toml-test/cmd/toml-test@latest -run 'valid/string/*' ./.build/debug/toml-decoder
+go run github.com/toml-lang/toml-test/v2/cmd/toml-test@<version> test -decoder=./.build/debug/toml-decoder -run='valid/string/*'
 ```
+
+Replace `<version>` with the value of `TOML_TEST_VERSION` in the Makefile.
