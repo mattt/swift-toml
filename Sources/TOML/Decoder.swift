@@ -186,10 +186,21 @@ public final class TOMLDecoder {
     /// - Parameters:
     ///   - type: The type to decode.
     ///   - data: UTF-8 encoded TOML data.
+    ///     The data can start with one UTF-8 byte order mark.
     /// - Returns: The decoded value.
-    /// - Throws: ``TOMLDecodingError`` if parsing or decoding fails.
+    /// - Throws: ``TOMLDecodingError`` if parsing or decoding fails,
+    ///   or if `data` is not valid UTF-8.
     public func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
-        guard let string = String(data: data, encoding: .utf8) else {
+        if data.count > limits.maxInputSize {
+            throw TOMLDecodingError.invalidData("Input exceeds maximum size of \(limits.maxInputSize) bytes")
+        }
+
+        // Convert the bytes without Foundation, which can remove a leading
+        // byte order mark and differs between platforms.
+        // Decoding replaces each invalid sequence with U+FFFD,
+        // so the result has the same bytes only if the input is valid UTF-8.
+        let string = String(decoding: data, as: UTF8.self)
+        guard string.utf8.elementsEqual(data) else {
             throw TOMLDecodingError.invalidData("Unable to convert data to UTF-8 string")
         }
         return try decode(type, from: string)
