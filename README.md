@@ -12,8 +12,12 @@ for fast, spec-compliant parsing with full Swift Codable support.
 
 ## Features
 
-- [x] **100% passing on [toml-test](https://github.com/toml-lang/toml-test) compliance suite**
-- [x] Full [TOML v1.0.0](https://toml.io/en/v1.0.0) specification support
+- [x] **Passes the [toml-test](https://github.com/toml-lang/toml-test) compliance suite** for TOML 1.1.0,
+      and for TOML 1.0.0 except the invalid documents that TOML 1.1.0 allows
+- [x] Full [TOML v1.1.0](https://toml.io/en/v1.1.0) specification support,
+      which also reads [TOML v1.0.0](https://toml.io/en/v1.0.0) documents
+- [x] TOML 1.1 syntax: multi-line inline tables with trailing commas,
+      `\e` and `\xHH` escapes, and times without seconds
 - [x] All data types: strings, integers, floats, booleans, arrays, tables
 - [x] All date-time types: offset date-time, local date-time, local date, local time
 - [x] Inline tables and arrays of tables
@@ -224,6 +228,9 @@ For trusted input where you need no restrictions:
 ```swift
 decoder.limits = .unlimited
 ```
+
+The parser rejects documents nested more than about 128 levels deep,
+whatever the limits are.
 
 ## Development
 
