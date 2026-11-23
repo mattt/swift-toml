@@ -261,7 +261,7 @@ public final class TOMLDecoder {
             throw TOMLDecodingError.invalidData("Unknown parse error")
         }
 
-        return try convertNode(result.root, depth: 0)
+        return try convertNode(result.root)
     }
 
     private func decodeCTomlString(_ strData: CTomlString) -> String {
@@ -272,11 +272,137 @@ public final class TOMLDecoder {
         return ""
     }
 
-    private func convertNode(_ node: CTomlNode, depth: Int) throws -> TOMLValue {
+    /// Converts a parsed node and its descendants to a `TOMLValue`.
+    ///
+    /// The conversion keeps an explicit stack of the arrays and tables
+    /// that it is building, instead of recursing,
+    /// so that deeply nested documents do not overflow a small thread stack.
+    /// It visits nodes in depth-first order, children in index order,
+    /// and checks each node's depth and size limits when it visits the node.
+    private func convertNode(_ root: CTomlNode) throws -> TOMLValue {
+        var stack: [ContainerFrame] = []
+
+        switch try visit(root, depth: 0) {
+        case .value(let value):
+            return value
+        case .container(let frame):
+            stack.append(frame)
+        }
+
+        // The stack is never empty here: the loop returns
+        // when it finishes the root container.
+        while true {
+            let top = stack.count - 1
+            guard let child = stack[top].nextChild(decodeKey: decodeCTomlString) else {
+                let value = stack.removeLast().value
+                if stack.isEmpty {
+                    return value
+                }
+                stack[top - 1].append(value)
+                continue
+            }
+
+            switch try visit(child, depth: stack[top].depth + 1) {
+            case .value(let value):
+                stack[top].append(value)
+            case .container(let frame):
+                stack.append(frame)
+            }
+        }
+    }
+
+    /// The result of visiting a node:
+    /// either a finished value or an array or table to fill.
+    private enum Visit {
+        case value(TOMLValue)
+        case container(ContainerFrame)
+    }
+
+    /// An array or table that ``convertNode(_:)`` is building.
+    private struct ContainerFrame {
+        let depth: Int
+        private let elements: UnsafeMutablePointer<CTomlNode>?
+        private let keys: UnsafeMutablePointer<CTomlString>?
+        private let count: Int
+        private var index = 0
+        private var pendingKey = ""
+        private var array: [TOMLValue]?
+        private var table: [String: TOMLValue]?
+
+        init(array node: CTomlArrayData, depth: Int) {
+            self.depth = depth
+            self.elements = node.elements
+            self.keys = nil
+            self.count = node.elements == nil ? 0 : node.count
+            self.array = []
+        }
+
+        init(table node: CTomlTableData, depth: Int) {
+            self.depth = depth
+            let hasEntries = node.keys != nil && node.values != nil
+            self.elements = node.values
+            self.keys = node.keys
+            self.count = hasEntries ? node.count : 0
+            self.table = [:]
+        }
+
+        /// Returns the next child node to convert, or `nil` if none remain.
+        /// For a table, it also records the child's key.
+        mutating func nextChild(decodeKey: (CTomlString) -> String) -> CTomlNode? {
+            guard index < count, let elements else { return nil }
+            if let keys {
+                pendingKey = decodeKey(keys[index])
+            }
+            defer { index += 1 }
+            return elements[index]
+        }
+
+        /// Adds the converted value of the child that ``nextChild(decodeKey:)`` returned last.
+        mutating func append(_ value: TOMLValue) {
+            if table != nil {
+                table?[pendingKey] = value
+            } else {
+                array?.append(value)
+            }
+        }
+
+        var value: TOMLValue {
+            if let table {
+                return .table(table)
+            }
+            return .array(array ?? [])
+        }
+    }
+
+    /// Checks a node's limits, then converts a scalar node to a value
+    /// or starts an array or table.
+    private func visit(_ node: CTomlNode, depth: Int) throws -> Visit {
         guard depth < limits.maxDepth else {
             throw TOMLDecodingError.invalidData("Maximum nesting depth of \(limits.maxDepth) exceeded")
         }
 
+        switch node.type {
+        case CTOML_ARRAY:
+            let count = node.data.array_value.count
+            guard count <= limits.maxArrayLength else {
+                throw TOMLDecodingError.invalidData("Array exceeds maximum length of \(limits.maxArrayLength) elements")
+            }
+            return .container(ContainerFrame(array: node.data.array_value, depth: depth))
+
+        case CTOML_TABLE:
+            let count = node.data.table_value.count
+            guard count <= limits.maxTableKeys else {
+                throw TOMLDecodingError.invalidData("Table exceeds maximum of \(limits.maxTableKeys) keys")
+            }
+            return .container(ContainerFrame(table: node.data.table_value, depth: depth))
+
+        default:
+            return try .value(convertScalar(node))
+        }
+    }
+
+    /// Converts a node that is not an array or a table.
+    private func convertScalar(_ node: CTomlNode) throws -> TOMLValue {
         switch node.type {
         case CTOML_STRING:
             let str = decodeCTomlString(node.data.string_value)
@@ -345,33 +471,6 @@ public final class TOMLDecoder {
                     nanosecond: Int(dt.time.nanosecond)
                 )
             )
-
-        case CTOML_ARRAY:
-            let count = node.data.array_value.count
-            guard count <= limits.maxArrayLength else {
-                throw TOMLDecodingError.invalidData("Array exceeds maximum length of \(limits.maxArrayLength) elements")
-            }
-            var values: [TOMLValue] = []
-            if let elements = node.data.array_value.elements {
-                for i in 0 ..< count {
-                    try values.append(convertNode(elements[i], depth: depth + 1))
-                }
-            }
-            return .array(values)
-
-        case CTOML_TABLE:
-            let count = node.data.table_value.count
-            guard count <= limits.maxTableKeys else {
-                throw TOMLDecodingError.invalidData("Table exceeds maximum of \(limits.maxTableKeys) keys")
-            }
-            var dict: [String: TOMLValue] = [:]
-            if let keys = node.data.table_value.keys, let tableValues = node.data.table_value.values {
-                for i in 0 ..< count {
-                    let key = decodeCTomlString(keys[i])
-                    dict[key] = try convertNode(tableValues[i], depth: depth + 1)
-                }
-            }
-            return .table(dict)
 
         case CTOML_NONE:
             return .string("")
