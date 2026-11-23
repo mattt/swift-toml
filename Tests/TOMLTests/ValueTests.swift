@@ -117,6 +117,13 @@ struct ValueTests {
         #expect(try TOMLDecoder().decode(TOMLValue.self, from: data) == Self.expected)
     }
 
+    /// The encoder writes an offset date-time with millisecond precision.
+    @Test func encodeOffsetDateTimeWithMillisecondPrecision() throws {
+        let value = try TOMLDecoder().decode(TOMLValue.self, from: "time = 1979-05-27T07:32:00.123456Z")
+        let toml = try TOMLEncoder().encodeToString(value)
+        #expect(toml == "time = 1979-05-27T07:32:00.123Z\n")
+    }
+
     @Test func encodeProperty() throws {
         struct Package: Encodable {
             let name: String

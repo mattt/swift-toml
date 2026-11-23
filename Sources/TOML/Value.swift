@@ -31,6 +31,9 @@ import Foundation
 /// ``TOMLEncoder`` writes a `TOMLValue` as it is,
 /// without the date or key encoding strategies.
 /// A top-level `TOMLValue` must be a table.
+/// The encoder writes an ``offsetDateTime(_:)`` with millisecond precision,
+/// as it writes any `Date`,
+/// so `1979-05-27T07:32:00.123456Z` round-trips as `1979-05-27T07:32:00.123Z`.
 ///
 /// Other coders, such as `JSONEncoder` and `JSONDecoder`,
 /// encode each case as a single value, an array, or a keyed container,
@@ -145,7 +148,8 @@ extension TOMLValue: Codable {
 
     /// Encodes the value into the given encoder.
     ///
-    /// ``TOMLEncoder`` writes the value as it is.
+    /// ``TOMLEncoder`` writes the value as it is,
+    /// except that it writes an offset date-time with millisecond precision.
     /// Another encoder gets each case as a single value, an array, or a keyed container.
     public func encode(to encoder: any Encoder) throws {
         if let encoder = encoder as? _TOMLEncoder {

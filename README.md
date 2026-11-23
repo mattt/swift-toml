@@ -196,7 +196,9 @@ struct Package: Codable {
 let document = try TOMLDecoder().decode(TOMLValue.self, from: toml)
 ```
 
-`TOMLEncoder` writes a `TOMLValue` as it is.
+`TOMLEncoder` writes a `TOMLValue` as it is,
+except that it writes offset date-times with millisecond precision,
+so `07:32:00.123456Z` round-trips as `07:32:00.123Z`.
 
 ### Key Decoding Strategy
 

@@ -230,6 +230,7 @@ public final class TOMLDecoder {
     ///   `DecodingError` if the document doesn't match `type`,
     ///   such as a value of another type, a missing key,
     ///   or an integer that doesn't fit in the property's type.
+    ///   Any error that a type's `init(from:)` method throws.
     public func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         if data.count > limits.maxInputSize {
             throw TOMLDecodingError.invalidData("Input exceeds maximum size of \(limits.maxInputSize) bytes")
@@ -257,6 +258,7 @@ public final class TOMLDecoder {
     ///   `DecodingError` if the document doesn't match `type`,
     ///   such as a value of another type, a missing key,
     ///   or an integer that doesn't fit in the property's type.
+    ///   Any error that a type's `init(from:)` method throws.
     public func decode<T: Decodable>(_ type: T.Type, from string: String) throws -> T {
         if string.utf8.count > limits.maxInputSize {
             throw TOMLDecodingError.invalidData("Input exceeds maximum size of \(limits.maxInputSize) bytes")
