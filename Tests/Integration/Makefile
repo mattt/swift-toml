@@ -34,8 +34,9 @@ test-encoder: $(addprefix test-encoder-,$(TOML_VERSIONS))
 test-decoder-%: $(DECODER)
 	$(TOML_TEST) test -toml=$* -decoder=$(DECODER) $(if $(SKIP_$*),-skip='$(SKIP_$*)' -skip-must-err)
 
-# toml-test checks the encoder's output with the decoder,
-# so the encoder tests need both commands.
+# toml-test checks the encoder's output with its own Go parser,
+# not with the decoder.
+# The toml-test command requires `-decoder` even when it runs only encoder tests.
 # Each `*` matches one path segment.
 test-encoder-%: $(DECODER) $(ENCODER)
 	$(TOML_TEST) test -toml=$* -decoder=$(DECODER) -encoder=$(ENCODER) -run='encoder/*,encoder/*/*'
