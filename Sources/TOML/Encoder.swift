@@ -182,10 +182,21 @@ public final class TOMLEncoder {
         /// ```
         ///
         /// A nested array of more than one element is indented
-        /// one more level for each level of nesting.
-        /// Empty arrays, arrays of one element and their contents,
-        /// arrays of tables written as `[[name]]` sections,
-        /// and inline tables and their contents stay on one line.
+        /// one more level for each level of nesting,
+        /// including an array in a one-element array or in an inline table:
+        ///
+        /// ```toml
+        /// single = [[
+        ///     1,
+        ///     2,
+        /// ]]
+        /// ```
+        ///
+        /// An empty array and the brackets of a one-element array stay on one line,
+        /// and so do an inline table's braces and the start of each of its entries.
+        /// This option doesn't change the form of an array of tables
+        /// that the encoder writes as `[[name]]` sections,
+        /// but it applies to the arrays in those tables.
         public static let prettyPrinted = OutputFormatting(rawValue: 1 << 1)
     }
 
@@ -338,8 +349,8 @@ private struct Serializer {
     /// Returns the TOML text for a value.
     ///
     /// - Parameter indentLevel: The indentation level of the line where the value starts,
-    ///   if an array of more than one element can span several lines,
-    ///   or `nil` if the value must be on one line.
+    ///   if each array of more than one element in the value spans several lines,
+    ///   or `nil` if the value is on one line.
     private func serializeValue(_ value: TOMLValue, indentLevel: Int?) -> String {
         switch value {
         case .string(let s):
@@ -372,15 +383,18 @@ private struct Serializer {
                 }
                 return "[\n\(items.joined())\(String(repeating: Self.indentation, count: indentLevel))]"
             }
-            let items = arr.map { serializeValue($0, indentLevel: nil) }
+            // An empty or one-element array is on one line,
+            // but the element starts on that line and can span several lines.
+            let items = arr.map { serializeValue($0, indentLevel: indentLevel) }
             return "[\(items.joined(separator: ", "))]"
         case .table(let dict):
-            // TOML 1.0 doesn't allow newlines in an inline table,
-            // so its values are on one line.
+            // TOML 1.0 doesn't allow newlines between an inline table's entries,
+            // but it allows them inside an array value,
+            // so each value starts on the table's line and can span several lines.
             let keys = sortKeys ? dict.keys.sorted() : Array(dict.keys)
             let items = keys.compactMap { key -> String? in
                 guard let val = dict[key] else { return nil }
-                return "\(escapeKey(key)) = \(serializeValue(val, indentLevel: nil))"
+                return "\(escapeKey(key)) = \(serializeValue(val, indentLevel: indentLevel))"
             }
             return "{ \(items.joined(separator: ", ")) }"
         }

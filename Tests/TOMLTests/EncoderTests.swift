@@ -710,7 +710,9 @@ struct EncoderTests {
         )
     }
 
-    @Test func prettyPrintedKeepsInlineTablesOnOneLine() throws {
+    /// An inline table's braces stay on its line,
+    /// and an array of more than one element in it spans several lines.
+    @Test func prettyPrintedArrayInInlineTable() throws {
         struct Config: Codable {
             let mixed: ArrayShapes.Mixed
         }
@@ -723,8 +725,33 @@ struct EncoderTests {
             toml == """
                 mixed = [
                     1,
-                    { values = [2, 3] },
+                    { values = [
+                        2,
+                        3,
+                    ] },
                 ]
+
+                """
+        )
+    }
+
+    /// A one-element array's brackets stay on its line,
+    /// and an array of more than one element in it spans several lines.
+    @Test func prettyPrintedArrayInOneElementArray() throws {
+        struct Config: Codable {
+            let single: [[Int]]
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let toml = try encoder.encodeToString(Config(single: [[1, 2]]))
+
+        #expect(
+            toml == """
+                single = [[
+                    1,
+                    2,
+                ]]
 
                 """
         )
@@ -773,7 +800,10 @@ struct EncoderTests {
                         ],
                         [3],
                     ],
-                    [[4, 5]],
+                    [[
+                        4,
+                        5,
+                    ]],
                 ]
                 empty = []
                 matrix = [
@@ -785,14 +815,20 @@ struct EncoderTests {
                 ]
                 mixed = [
                     1,
-                    { values = [2, 3] },
+                    { values = [
+                        2,
+                        3,
+                    ] },
                 ]
                 name = "app"
                 ports = [
                     8080,
                     8081,
                 ]
-                single = [[1, 2]]
+                single = [[
+                    1,
+                    2,
+                ]]
 
                 [server]
                 hosts = [
