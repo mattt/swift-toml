@@ -429,35 +429,76 @@ final class _TOMLEncoder: Encoder {
     var userInfo: [CodingUserInfoKey: Any]
     let options: EncodingOptions
 
+    /// The place that holds the value this encoder's containers write to.
+    ///
+    /// A super encoder's parent container holds the same slot,
+    /// so the parent sees the value without keeping the super encoder alive.
+    fileprivate let slot = EncodedSlot()
+
     /// The value that this encoder's containers write to,
     /// or `nil` if nothing is encoded yet.
-    fileprivate var storage: EncodedValue?
+    fileprivate var storage: EncodedValue? {
+        get { slot.value }
+        set { slot.value = newValue }
+    }
 
     /// The errors that this encoder, its containers, and its super encoders record.
     private let context: EncodingContext
 
+    /// The table and key where a keyed super encoder writes its value
+    /// when it's released.
+    private let superEncoderTarget: (table: EncodedTable, key: String)?
+
     /// Creates an encoder with its own error context,
     /// for the top-level value or a value that a container boxes.
     convenience init(codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any], options: EncodingOptions) {
-        self.init(codingPath: codingPath, userInfo: userInfo, options: options, context: EncodingContext())
+        self.init(
+            codingPath: codingPath,
+            userInfo: userInfo,
+            options: options,
+            context: EncodingContext(),
+            superEncoderTarget: nil
+        )
     }
 
     private init(
         codingPath: [any CodingKey],
         userInfo: [CodingUserInfoKey: Any],
         options: EncodingOptions,
-        context: EncodingContext
+        context: EncodingContext,
+        superEncoderTarget: (table: EncodedTable, key: String)?
     ) {
         self.codingPath = codingPath
         self.userInfo = userInfo
         self.options = options
         self.context = context
+        self.superEncoderTarget = superEncoderTarget
+    }
+
+    deinit {
+        // Like `JSONEncoder`, a keyed super encoder writes its value when it's released,
+        // so the value replaces one that the parent wrote at the key after it created the super encoder.
+        if let superEncoderTarget {
+            superEncoderTarget.table.entries[superEncoderTarget.key] = .slot(slot)
+        }
     }
 
     /// Returns a super encoder at the given coding path
     /// that shares this encoder's options and error context.
-    fileprivate func makeEncoder(codingPath: [any CodingKey]) -> _TOMLEncoder {
-        _TOMLEncoder(codingPath: codingPath, userInfo: userInfo, options: options, context: context)
+    ///
+    /// - Parameter target: The table and key where the super encoder
+    ///   writes its value again when it's released, if any.
+    fileprivate func makeSuperEncoder(
+        codingPath: [any CodingKey],
+        target: (table: EncodedTable, key: String)?
+    ) -> _TOMLEncoder {
+        _TOMLEncoder(
+            codingPath: codingPath,
+            userInfo: userInfo,
+            options: options,
+            context: context,
+            superEncoderTarget: target
+        )
     }
 
     /// The value that the encoder holds,
@@ -696,7 +737,7 @@ private enum EncodedValue {
     case array(EncodedArray)
 
     /// The place for the value that a super encoder writes.
-    case encoder(_TOMLEncoder)
+    case slot(EncodedSlot)
 
     func resolved() -> TOMLValue {
         switch self {
@@ -706,11 +747,16 @@ private enum EncodedValue {
             return .table(table.entries.mapValues { $0.resolved() })
         case .array(let array):
             return .array(array.elements.map { $0.resolved() })
-        case .encoder(let encoder):
+        case .slot(let slot):
             // Like `JSONEncoder`, a super encoder that encodes nothing writes an empty table.
-            return encoder.storage?.resolved() ?? .table([:])
+            return slot.value?.resolved() ?? .table([:])
         }
     }
+}
+
+/// The place that holds the value an encoder writes.
+private final class EncodedSlot {
+    var value: EncodedValue?
 }
 
 private final class EncodedTable {
@@ -748,8 +794,8 @@ private func tableStorage(at value: inout EncodedValue?) -> EncodedTable? {
         let table = EncodedTable(entries: entries.mapValues { .value($0) })
         value = .table(table)
         return table
-    case .encoder(let encoder):
-        return tableStorage(at: &encoder.storage)
+    case .slot(let slot):
+        return tableStorage(at: &slot.value)
     case .value, .array:
         return nil
     }
@@ -774,8 +820,8 @@ private func arrayStorage(at value: inout EncodedValue?) -> EncodedArray? {
         let array = EncodedArray(elements: elements.map { .value($0) })
         value = .array(array)
         return array
-    case .encoder(let encoder):
-        return arrayStorage(at: &encoder.storage)
+    case .slot(let slot):
+        return arrayStorage(at: &slot.value)
     case .value, .table:
         return nil
     }
@@ -902,13 +948,22 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
         superEncoder(forCodingKey: key)
     }
 
-    /// Returns an encoder that writes its value at the given key,
-    /// even after other values are written to this container.
+    /// Returns an encoder that writes its value at the given key.
     ///
-    /// Like `JSONEncoder`, the value replaces any value already at the key.
+    /// Like `JSONEncoder`, the super encoder's value replaces any value at the key,
+    /// including a value that this container writes there
+    /// before the super encoder is released.
+    /// A value that this container writes at the key after that release
+    /// replaces the super encoder's value.
     private func superEncoder(forCodingKey key: any CodingKey) -> any Encoder {
-        let superEncoder = encoder.makeEncoder(codingPath: codingPath + [key])
-        table.entries[encoder.convertKey(key)] = .encoder(superEncoder)
+        let convertedKey = encoder.convertKey(key)
+        let superEncoder = encoder.makeSuperEncoder(
+            codingPath: codingPath + [key],
+            target: (table, convertedKey)
+        )
+        // Reserve the key now, so the value is kept
+        // even if the super encoder is still alive when encoding finishes.
+        table.entries[convertedKey] = .slot(superEncoder.slot)
         return superEncoder
     }
 }
@@ -1025,8 +1080,11 @@ private struct TOMLUnkeyedEncodingContainer: UnkeyedEncodingContainer {
     /// Returns an encoder that writes its value at the next index,
     /// even after other values are appended to this container.
     mutating func superEncoder() -> any Encoder {
-        let superEncoder = encoder.makeEncoder(codingPath: codingPath + [TOMLCodingKey(index: count)])
-        array.elements.append(.encoder(superEncoder))
+        let superEncoder = encoder.makeSuperEncoder(
+            codingPath: codingPath + [TOMLCodingKey(index: count)],
+            target: nil
+        )
+        array.elements.append(.slot(superEncoder.slot))
         return superEncoder
     }
 }

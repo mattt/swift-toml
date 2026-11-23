@@ -457,6 +457,34 @@ struct EncoderContainerTests {
         #expect(tree == .table(["b": .integer(2), "parent": .table(["a": .integer(1)])]))
     }
 
+    /// Writes at super encoders' keys through the parent container
+    /// before and after it releases the super encoders.
+    struct LateSuperEncoderWrites: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case a, b, `super`
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            let keyedSuperEncoder = container.superEncoder(forKey: .a)
+            let superEncoder = container.superEncoder()
+            try container.encode(42, forKey: .a)
+            try container.encode(43, forKey: .super)
+            // The super encoders write when they're released, so their values win.
+            try 7.encode(to: keyedSuperEncoder)
+            try 8.encode(to: superEncoder)
+            // This super encoder is released before the parent writes at its key,
+            // so the parent's value wins.
+            try 9.encode(to: container.superEncoder(forKey: .b))
+            try container.encode(10, forKey: .b)
+        }
+    }
+
+    @Test func superEncoderValueWinsAtItsKey() throws {
+        let tree = try expectSameStructure(LateSuperEncoderWrites())
+        #expect(tree == .table(["a": .integer(7), "super": .integer(8), "b": .integer(10)]))
+    }
+
     @Test func classHierarchiesRoundTrip() throws {
         let encoder = TOMLEncoder()
         let decoder = TOMLDecoder()
