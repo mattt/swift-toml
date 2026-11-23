@@ -84,7 +84,16 @@ extension TOMLValue: Codable {
     /// in that order.
     public init(from decoder: any Decoder) throws {
         if let decoder = decoder as? _TOMLDecoder {
-            self = decoder.value
+            guard let value = decoder.value else {
+                throw DecodingError.valueNotFound(
+                    TOMLValue.self,
+                    DecodingError.Context(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "Cannot get value of type TOMLValue -- found no value instead"
+                    )
+                )
+            }
+            self = value
             return
         }
 

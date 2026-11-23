@@ -601,7 +601,12 @@ struct DecodingOptions {
 // MARK: - Internal Decoder
 
 final class _TOMLDecoder: Decoder {
-    let value: TOMLValue
+    /// The value to decode,
+    /// or `nil` for the value of a `super` key that a table doesn't have.
+    ///
+    /// Like `JSONDecoder` for a null value, the decoder has no containers for a missing value,
+    /// and its single-value container decodes only `nil`.
+    let value: TOMLValue?
     var codingPath: [any CodingKey]
     var userInfo: [CodingUserInfoKey: Any]
     let options: DecodingOptions
@@ -611,7 +616,7 @@ final class _TOMLDecoder: Decoder {
     let keepsTableKeys: Bool
 
     init(
-        value: TOMLValue,
+        value: TOMLValue?,
         codingPath: [any CodingKey],
         userInfo: [CodingUserInfoKey: Any],
         options: DecodingOptions,
@@ -631,7 +636,7 @@ final class _TOMLDecoder: Decoder {
     /// but it applies the strategy to the tables inside the dictionary.
     static func decode<T: Decodable>(
         _ type: T.Type,
-        from value: TOMLValue,
+        from value: TOMLValue?,
         codingPath: [any CodingKey],
         userInfo: [CodingUserInfoKey: Any],
         options: DecodingOptions
@@ -647,6 +652,15 @@ final class _TOMLDecoder: Decoder {
     }
 
     func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
+        guard let value else {
+            throw DecodingError.valueNotFound(
+                [String: Any].self,
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "Cannot get keyed decoding container -- found no value instead"
+                )
+            )
+        }
         guard case .table(let dict) = value else {
             throw DecodingError.typeMismatch(
                 [String: Any].self,
@@ -668,6 +682,15 @@ final class _TOMLDecoder: Decoder {
     }
 
     func unkeyedContainer() throws -> any UnkeyedDecodingContainer {
+        guard let value else {
+            throw DecodingError.valueNotFound(
+                [Any].self,
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "Cannot get unkeyed decoding container -- found no value instead"
+                )
+            )
+        }
         guard case .array(let arr) = value else {
             throw DecodingError.typeMismatch(
                 [Any].self,
@@ -825,9 +848,6 @@ private func convertInteger<T: FixedWidthInteger>(
 // MARK: - Keyed Decoding Container
 
 private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContainerProtocol {
-    /// The table as it appears in the document.
-    let table: [String: TOMLValue]
-
     /// The table with its keys converted by the key decoding strategy.
     let dict: [String: TOMLValue]
 
@@ -849,7 +869,6 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
         options: DecodingOptions,
         convertsKeys: Bool = true
     ) {
-        self.table = table
         self.codingPath = codingPath
         self.userInfo = userInfo
         self.options = options
@@ -1045,10 +1064,18 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
         )
     }
 
+    /// Returns a decoder for the value at the key `super`.
+    ///
+    /// Like `JSONDecoder`, this reads the key that `superEncoder()` writes,
+    /// and it doesn't throw if the table doesn't have the key.
+    /// The decoder for a missing key throws `DecodingError.valueNotFound`
+    /// for a keyed or unkeyed container,
+    /// and its single-value container decodes only `nil`.
     func superDecoder() throws -> any Decoder {
-        _TOMLDecoder(
-            value: .table(table),
-            codingPath: codingPath,
+        let key = TOMLCodingKey(stringValue: "super")
+        return _TOMLDecoder(
+            value: dict[key.stringValue],
+            codingPath: codingPath + [key],
             userInfo: userInfo,
             options: options
         )
@@ -1306,34 +1333,52 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
 // MARK: - Single Value Decoding Container
 
 private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
-    let value: TOMLValue
+    /// The value to decode, or `nil` for a missing value.
+    let value: TOMLValue?
     var codingPath: [any CodingKey]
     let userInfo: [CodingUserInfoKey: Any]
     let options: DecodingOptions
 
     func decodeNil() -> Bool {
-        false
+        value == nil
+    }
+
+    /// Returns the value, or throws if the value is missing.
+    private func requireValue<T>(_ type: T.Type) throws -> TOMLValue {
+        guard let value else {
+            throw DecodingError.valueNotFound(
+                type,
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "Cannot get value of type \(type) -- found no value instead"
+                )
+            )
+        }
+        return value
     }
 
     func decode(_ type: Bool.Type) throws -> Bool {
+        let value = try requireValue(type)
         guard case .boolean(let b) = value else {
-            throw typeMismatchError(type)
+            throw typeMismatchError(type, value: value)
         }
         return b
     }
 
     func decode(_ type: String.Type) throws -> String {
+        let value = try requireValue(type)
         guard case .string(let s) = value else {
-            throw typeMismatchError(type)
+            throw typeMismatchError(type, value: value)
         }
         return s
     }
 
     func decode(_ type: Double.Type) throws -> Double {
+        let value = try requireValue(type)
         switch value {
         case .float(let f): return f
         case .integer(let i): return Double(i)
-        default: throw typeMismatchError(type)
+        default: throw typeMismatchError(type, value: value)
         }
     }
 
@@ -1358,8 +1403,9 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
     }
 
     func decode(_ type: Int64.Type) throws -> Int64 {
+        let value = try requireValue(type)
         guard case .integer(let i) = value else {
-            throw typeMismatchError(type)
+            throw typeMismatchError(type, value: value)
         }
         return i
     }
@@ -1389,24 +1435,36 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
     }
 
     func decode<T: Decodable>(_ type: T.Type) throws -> T {
+        guard let value else {
+            // Like `JSONDecoder` for a null value, the type decides,
+            // so that an optional type decodes `nil`.
+            return try _TOMLDecoder.decode(
+                type,
+                from: nil,
+                codingPath: codingPath,
+                userInfo: userInfo,
+                options: options
+            )
+        }
+
         if type == Date.self {
             return try decodeDate(from: value, strategy: options.dateDecodingStrategy, codingPath: codingPath) as! T
         }
         if type == LocalDateTime.self {
             guard case .localDateTime(let dt) = value else {
-                throw typeMismatchError(type)
+                throw typeMismatchError(type, value: value)
             }
             return dt as! T
         }
         if type == LocalDate.self {
             guard case .localDate(let d) = value else {
-                throw typeMismatchError(type)
+                throw typeMismatchError(type, value: value)
             }
             return d as! T
         }
         if type == LocalTime.self {
             guard case .localTime(let t) = value else {
-                throw typeMismatchError(type)
+                throw typeMismatchError(type, value: value)
             }
             return t as! T
         }
@@ -1423,7 +1481,7 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
         )
     }
 
-    private func typeMismatchError<T>(_ type: T.Type) -> DecodingError {
+    private func typeMismatchError<T>(_ type: T.Type, value: TOMLValue) -> DecodingError {
         DecodingError.typeMismatch(
             type,
             DecodingError.Context(
