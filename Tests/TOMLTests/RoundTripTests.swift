@@ -43,4 +43,33 @@ struct RoundTripTests {
 
         #expect(original == decoded)
     }
+
+    @Test(arguments: [
+        (TOMLEncoder.DateEncodingStrategy.secondsSince1970, TOMLDecoder.DateDecodingStrategy.secondsSince1970),
+        (.millisecondsSince1970, .millisecondsSince1970),
+    ])
+    func numericDates(
+        encoding: TOMLEncoder.DateEncodingStrategy,
+        decoding: TOMLDecoder.DateDecodingStrategy
+    ) throws {
+        struct Config: Codable, Equatable {
+            let created: Date
+            let history: [Date]
+        }
+
+        let original = Config(
+            created: Date(timeIntervalSince1970: 1_700_000_000),
+            history: [Date(timeIntervalSince1970: 1_600_000_000.25), Date(timeIntervalSince1970: 0)]
+        )
+
+        let encoder = TOMLEncoder()
+        encoder.dateEncodingStrategy = encoding
+        let encoded = try encoder.encode(original)
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = decoding
+        let decoded = try decoder.decode(Config.self, from: encoded)
+
+        #expect(original == decoded)
+    }
 }

@@ -66,15 +66,27 @@ public final class TOMLDecoder {
     /// TOML natively supports date-time values, which are decoded according
     /// to this strategy.
     public enum DateDecodingStrategy: Sendable {
-        /// Decode dates from ISO 8601 formatted strings or TOML offset date-times.
+        /// Decode dates from TOML date-time values.
         ///
-        /// This is the default strategy and works with TOML's native date-time types.
+        /// An offset date-time decodes as the instant that it names.
+        /// A local date-time decodes as that time in the current time zone,
+        /// and a local date decodes as midnight at the start of that day
+        /// in the current time zone.
+        /// This strategy doesn't parse strings.
+        ///
+        /// This is the default strategy.
         case iso8601
 
-        /// Decode dates from a floating-point number of seconds since January 1, 1970.
+        /// Decode dates from a number of seconds since January 1, 1970,
+        /// written as an integer or a float.
+        ///
+        /// This strategy also decodes TOML date-time values, as ``iso8601`` does.
         case secondsSince1970
 
-        /// Decode dates from a floating-point number of milliseconds since January 1, 1970.
+        /// Decode dates from a number of milliseconds since January 1, 1970,
+        /// written as an integer or a float.
+        ///
+        /// This strategy also decodes TOML date-time values, as ``iso8601`` does.
         case millisecondsSince1970
     }
 
@@ -693,6 +705,72 @@ private func decodeURL(from string: String, codingPath: [any CodingKey]) throws 
     return url
 }
 
+/// Decodes a `Date` from a TOML value with the given strategy.
+///
+/// Every strategy decodes TOML offset date-times, local date-times, and local dates.
+/// The numeric strategies also decode integers and floats.
+private func decodeDate(
+    from value: TOMLValue,
+    strategy: TOMLDecoder.DateDecodingStrategy,
+    codingPath: [any CodingKey]
+) throws -> Date {
+    let typeMismatch = DecodingError.typeMismatch(
+        Date.self,
+        DecodingError.Context(
+            codingPath: codingPath,
+            debugDescription: "Expected \(Date.self), found \(valueTypeName(value))"
+        )
+    )
+
+    let number: Double
+    switch value {
+    case .offsetDateTime(let date):
+        return date
+    case .localDateTime(let dt):
+        let components = DateComponents(
+            year: dt.year,
+            month: dt.month,
+            day: dt.day,
+            hour: dt.hour,
+            minute: dt.minute,
+            second: dt.second,
+            nanosecond: dt.nanosecond
+        )
+        return try localDate(from: components, codingPath: codingPath)
+    case .localDate(let d):
+        let components = DateComponents(year: d.year, month: d.month, day: d.day)
+        return try localDate(from: components, codingPath: codingPath)
+    case .integer(let i):
+        number = Double(i)
+    case .float(let f):
+        number = f
+    default:
+        throw typeMismatch
+    }
+
+    switch strategy {
+    case .secondsSince1970:
+        return Date(timeIntervalSince1970: number)
+    case .millisecondsSince1970:
+        return Date(timeIntervalSince1970: number / 1000)
+    case .iso8601:
+        throw typeMismatch
+    }
+}
+
+/// Creates a date from components in the current time zone.
+private func localDate(from components: DateComponents, codingPath: [any CodingKey]) throws -> Date {
+    guard let date = Calendar(identifier: .gregorian).date(from: components) else {
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: codingPath,
+                debugDescription: "Invalid date components"
+            )
+        )
+    }
+    return date
+}
+
 /// Converts a TOML integer to the requested integer type.
 ///
 /// Like `JSONDecoder`, this throws instead of trapping
@@ -867,7 +945,11 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
         let value = try getValue(forKey: key)
 
         if type == Date.self {
-            return try decodeDate(from: value, forKey: key) as! T
+            return try decodeDate(
+                from: value,
+                strategy: options.dateDecodingStrategy,
+                codingPath: codingPath + [key]
+            ) as! T
         }
         if type == LocalDateTime.self {
             guard case .localDateTime(let dt) = value else {
@@ -898,56 +980,6 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
             userInfo: userInfo,
             options: options
         )
-    }
-
-    private func decodeDate(from value: TOMLValue, forKey key: Key) throws -> Date {
-        switch value {
-        case .offsetDateTime(let date):
-            return date
-        case .localDateTime(let dt):
-            var components = DateComponents()
-            components.year = dt.year
-            components.month = dt.month
-            components.day = dt.day
-            components.hour = dt.hour
-            components.minute = dt.minute
-            components.second = dt.second
-            components.nanosecond = dt.nanosecond
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath + [key],
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        case .localDate(let d):
-            var components = DateComponents()
-            components.year = d.year
-            components.month = d.month
-            components.day = d.day
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath + [key],
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        case .float(let f):
-            switch options.dateDecodingStrategy {
-            case .secondsSince1970:
-                return Date(timeIntervalSince1970: f)
-            case .millisecondsSince1970:
-                return Date(timeIntervalSince1970: f / 1000)
-            default:
-                throw typeMismatchError(Date.self, value: value, key: key)
-            }
-        default:
-            throw typeMismatchError(Date.self, value: value, key: key)
-        }
     }
 
     func nestedContainer<NestedKey: CodingKey>(
@@ -1125,7 +1157,11 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
         let value = try nextValue()
 
         if type == Date.self {
-            return try decodeDate(from: value) as! T
+            return try decodeDate(
+                from: value,
+                strategy: options.dateDecodingStrategy,
+                codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)]
+            ) as! T
         }
         if type == LocalDateTime.self {
             guard case .localDateTime(let dt) = value else {
@@ -1159,47 +1195,6 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
             userInfo: userInfo,
             options: options
         )
-    }
-
-    private func decodeDate(from value: TOMLValue) throws -> Date {
-        switch value {
-        case .offsetDateTime(let date):
-            return date
-        case .localDateTime(let dt):
-            var components = DateComponents()
-            components.year = dt.year
-            components.month = dt.month
-            components.day = dt.day
-            components.hour = dt.hour
-            components.minute = dt.minute
-            components.second = dt.second
-            components.nanosecond = dt.nanosecond
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        case .localDate(let d):
-            var components = DateComponents()
-            components.year = d.year
-            components.month = d.month
-            components.day = d.day
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        default:
-            throw typeMismatchError(Date.self, value: value)
-        }
     }
 
     mutating func nestedContainer<NestedKey: CodingKey>(
@@ -1341,7 +1336,7 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
 
     func decode<T: Decodable>(_ type: T.Type) throws -> T {
         if type == Date.self {
-            return try decodeDate() as! T
+            return try decodeDate(from: value, strategy: options.dateDecodingStrategy, codingPath: codingPath) as! T
         }
         if type == LocalDateTime.self {
             guard case .localDateTime(let dt) = value else {
@@ -1372,47 +1367,6 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
             userInfo: userInfo,
             options: options
         )
-    }
-
-    private func decodeDate() throws -> Date {
-        switch value {
-        case .offsetDateTime(let date):
-            return date
-        case .localDateTime(let dt):
-            var components = DateComponents()
-            components.year = dt.year
-            components.month = dt.month
-            components.day = dt.day
-            components.hour = dt.hour
-            components.minute = dt.minute
-            components.second = dt.second
-            components.nanosecond = dt.nanosecond
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath,
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        case .localDate(let d):
-            var components = DateComponents()
-            components.year = d.year
-            components.month = d.month
-            components.day = d.day
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath,
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        default:
-            throw typeMismatchError(Date.self)
-        }
     }
 
     private func typeMismatchError<T>(_ type: T.Type) -> DecodingError {

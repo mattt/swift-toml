@@ -1742,6 +1742,98 @@ struct TOMLDecoderTests {
         }
     }
 
+    // MARK: - Numeric Date Decoding
+
+    /// A TOML number and the seconds since 1970 that it represents under a strategy.
+    struct NumericDate: Sendable, CustomTestStringConvertible {
+        let strategy: TOMLDecoder.DateDecodingStrategy
+        let toml: String
+        let seconds: TimeInterval
+
+        var testDescription: String {
+            "\(toml) with \(strategy)"
+        }
+    }
+
+    static let numericDates: [NumericDate] = [
+        NumericDate(strategy: .secondsSince1970, toml: "1700000000", seconds: 1_700_000_000),
+        NumericDate(strategy: .secondsSince1970, toml: "1700000000.5", seconds: 1_700_000_000.5),
+        NumericDate(strategy: .millisecondsSince1970, toml: "1700000000500", seconds: 1_700_000_000.5),
+        NumericDate(strategy: .millisecondsSince1970, toml: "1700000000250.0", seconds: 1_700_000_000.25),
+    ]
+
+    /// Decodes a date with a single-value container.
+    struct Timestamp: Decodable {
+        let date: Date
+
+        init(from decoder: any Decoder) throws {
+            date = try decoder.singleValueContainer().decode(Date.self)
+        }
+    }
+
+    @Test(arguments: numericDates)
+    func keyedContainerDecodeDateFromNumber(_ numeric: NumericDate) throws {
+        struct Config: Decodable {
+            let t: Date
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = numeric.strategy
+        let config = try decoder.decode(Config.self, from: "t = \(numeric.toml)")
+        #expect(config.t.timeIntervalSince1970 == numeric.seconds)
+    }
+
+    @Test(arguments: numericDates)
+    func unkeyedContainerDecodeDateFromNumber(_ numeric: NumericDate) throws {
+        struct Config: Decodable {
+            let t: [Date]
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = numeric.strategy
+        let config = try decoder.decode(Config.self, from: "t = [\(numeric.toml), \(numeric.toml)]")
+        #expect(config.t.map(\.timeIntervalSince1970) == [numeric.seconds, numeric.seconds])
+    }
+
+    @Test(arguments: numericDates)
+    func singleValueContainerDecodeDateFromNumber(_ numeric: NumericDate) throws {
+        struct Config: Decodable {
+            let t: Timestamp
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = numeric.strategy
+        let config = try decoder.decode(Config.self, from: "t = \(numeric.toml)")
+        #expect(config.t.date.timeIntervalSince1970 == numeric.seconds)
+    }
+
+    @Test(arguments: ["1700000000", "1700000000.0", #""2024-01-15T09:30:00Z""#])
+    func iso8601DecodeDateFromNonDateThrows(toml: String) throws {
+        struct Config: Decodable {
+            let t: Date
+            let ts: [Date]
+            let single: Timestamp
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let documents = [
+            ("t = \(toml)", ["t"]),
+            ("t = 2024-01-15T09:30:00Z\nts = [\(toml)]", ["ts", "Index 0"]),
+            ("t = 2024-01-15T09:30:00Z\nts = []\nsingle = \(toml)", ["single"]),
+        ]
+        for (document, codingPath) in documents {
+            do {
+                _ = try decoder.decode(Config.self, from: document)
+                Issue.record("Expected a decoding error for \(document)")
+            } catch DecodingError.typeMismatch(let type, let context) {
+                #expect(type is Date.Type)
+                #expect(context.codingPath.map(\.stringValue) == codingPath)
+            }
+        }
+    }
+
     // MARK: - Unkeyed Container Date Decoding
 
     @Test func unkeyedContainerDecodeDateFromOffsetDateTime() throws {
