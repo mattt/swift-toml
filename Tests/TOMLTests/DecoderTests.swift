@@ -796,6 +796,28 @@ struct TOMLDecoderTests {
         #expect(result["a"]?["b"]?["c"]?["value"] == 1)
     }
 
+    @Test func parserNestingCeilingAllowsMaximumDepth() throws {
+        let decoder = TOMLDecoder()
+        decoder.limits = .unlimited
+        let toml = "a = " + String(repeating: "[", count: 128) + String(repeating: "]", count: 128)
+
+        let result = try decoder.decode([String: NestedArray].self, from: toml)
+        #expect(result["a"]?.depth == 128)
+    }
+
+    @Test func parserNestingCeilingAppliesWithUnlimitedLimits() throws {
+        let decoder = TOMLDecoder()
+        decoder.limits = .unlimited
+        let toml = "a = " + String(repeating: "[", count: 129) + String(repeating: "]", count: 129)
+
+        #expect {
+            try decoder.decode([String: NestedArray].self, from: toml)
+        } throws: { error in
+            guard case .invalidSyntax = error as? TOMLDecodingError else { return false }
+            return true
+        }
+    }
+
     @Test func decodingLimitsMaxTableKeys() throws {
         let decoder = TOMLDecoder()
         decoder.limits.maxTableKeys = 3
@@ -1097,6 +1119,62 @@ struct TOMLDecoderTests {
 
         #expect(config.fruit.apple.color == "red")
         #expect(config.fruit.apple.taste == "sweet")
+    }
+
+    // MARK: - TOML 1.1 Syntax
+
+    @Test func decodeMultilineInlineTableWithTrailingComma() throws {
+        let toml = """
+            point = {
+                x = 1,
+                y = 2, # comment
+            }
+            """
+
+        struct Config: Codable {
+            struct Point: Codable {
+                let x: Int
+                let y: Int
+            }
+            let point: Point
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+
+        #expect(config.point.x == 1)
+        #expect(config.point.y == 2)
+    }
+
+    @Test func decodeEscapeAndByteEscapes() throws {
+        let toml = #"""
+            escape = "\e[0m"
+            byte = "\x41\xE9"
+            """#
+
+        let value = try TOMLDecoder().decode([String: String].self, from: toml)
+
+        #expect(value["escape"] == "\u{1B}[0m")
+        #expect(value["byte"] == "A\u{E9}")
+    }
+
+    @Test func decodeTimesWithoutSeconds() throws {
+        let toml = """
+            time = 07:32
+            local = 1979-05-27T07:32
+            offset = 1979-05-27T07:32Z
+            """
+
+        struct Config: Codable {
+            let time: LocalTime
+            let local: LocalDateTime
+            let offset: Date
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+
+        #expect(config.time == LocalTime(hour: 7, minute: 32, second: 0))
+        #expect(config.local == LocalDateTime(year: 1979, month: 5, day: 27, hour: 7, minute: 32, second: 0))
+        #expect(config.offset == Date(timeIntervalSince1970: 296_638_320))
     }
 
     // MARK: - Boolean Values
@@ -1484,5 +1562,17 @@ struct TOMLDecoderTests {
         #expect(components.year == 2024)
         #expect(components.month == 6)
         #expect(components.day == 15)
+    }
+}
+
+/// An array that contains only arrays, for testing nesting depth.
+private struct NestedArray: Decodable {
+    let elements: [NestedArray]
+
+    /// The number of nested array levels, including this one.
+    var depth: Int { 1 + (elements.map(\.depth).max() ?? 0) }
+
+    init(from decoder: any Decoder) throws {
+        elements = try decoder.singleValueContainer().decode([NestedArray].self)
     }
 }

@@ -3,7 +3,8 @@ import Foundation
 
 /// A decoder that converts TOML format data into Swift values.
 ///
-/// This decoder conforms to the [TOML v1.0.0 specification](https://toml.io/en/v1.0.0).
+/// This decoder conforms to the [TOML v1.1.0 specification](https://toml.io/en/v1.1.0).
+/// It also reads [TOML v1.0.0](https://toml.io/en/v1.0.0) documents.
 /// It supports all TOML data types including strings, integers, floats, booleans,
 /// dates and times, arrays, and tables.
 ///
@@ -97,6 +98,11 @@ public final class TOMLDecoder {
         public var maxInputSize: Int
 
         /// Maximum nesting depth for tables and arrays.
+        ///
+        /// - Note: The parser also rejects documents that nest more than
+        ///   about 128 levels deep, whatever the value of this property.
+        ///   For example, 128 levels of nested arrays parse, but 129 levels do not.
+        ///   Inline tables, table headers, and dotted keys count toward the same ceiling.
         public var maxDepth: Int
 
         /// Maximum number of keys in a single table.
@@ -132,6 +138,9 @@ public final class TOMLDecoder {
         ///
         /// Use this only when you have full control over the input data
         /// and need to decode arbitrarily large or complex TOML structures.
+        ///
+        /// The parser's nesting ceiling of about 128 levels still applies;
+        /// see ``maxDepth``.
         ///
         /// For production use with external input, use ``default`` or
         /// ``init(maxInputSize:maxDepth:maxTableKeys:maxArrayLength:maxStringLength:)``

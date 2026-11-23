@@ -3,7 +3,7 @@ import Foundation
 /// A dynamically-typed TOML value.
 ///
 /// `TOMLValue` represents the various value types defined in the
-/// [TOML specification](https://toml.io/en/v1.0.0), including strings,
+/// [TOML specification](https://toml.io/en/v1.1.0), including strings,
 /// integers, floats, booleans, dates and times, arrays, and tables.
 ///
 /// This type is used internally during encoding and decoding,
