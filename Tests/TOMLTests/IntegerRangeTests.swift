@@ -255,7 +255,11 @@ struct IntegerRangeTests {
             expectInvalidValue { _ = try encoder.encodeToString(Keyed(n: [value])) }
         }
 
-        for value in [UInt.max, UInt(Int64.max) + 1] {
+        // Where `UInt` is 32 bits, such as on arm64_32, every `UInt` value fits in `Int64`.
+        guard let pastInt64UInt = UInt(exactly: pastInt64) else {
+            return
+        }
+        for value in [UInt.max, pastInt64UInt] {
             expectInvalidValue(lastPathComponent: "n") { _ = try encoder.encodeToString(KeyedUInt(n: value)) }
             expectInvalidValue(lastPathComponent: "Index 0") {
                 _ = try encoder.encodeToString(Keyed(n: UnkeyedUInt(values: [value])))
@@ -267,7 +271,9 @@ struct IntegerRangeTests {
     @Test func encodeUnsignedIntegersAtInt64Max() throws {
         let encoder = TOMLEncoder()
         #expect(try encoder.encodeToString(KeyedUInt64(n: UInt64(Int64.max))) == "n = \(Int64.max)\n")
-        #expect(try encoder.encodeToString(KeyedUInt(n: UInt(Int64.max))) == "n = \(Int64.max)\n")
+        // Where `UInt` is 32 bits, this is `UInt.max`.
+        let largestUInt = UInt(clamping: Int64.max)
+        #expect(try encoder.encodeToString(KeyedUInt(n: largestUInt)) == "n = \(largestUInt)\n")
         #expect(try encoder.encodeToString(Keyed(n: UInt64(Int64.max))) == "n = \(Int64.max)\n")
         #expect(
             try encoder.encodeToString(Keyed(n: Unkeyed(values: [UInt64(Int64.max)]))) == "n = [\(Int64.max)]\n"
