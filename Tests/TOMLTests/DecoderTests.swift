@@ -644,9 +644,9 @@ struct TOMLDecoderTests {
 
     @Test func decodeConvertFromSnakeCase() throws {
         let toml = """
-            userName = "john"
-            userEmail = "john@example.com"
-            createdAt = 123
+            user_name = "john"
+            user_email = "john@example.com"
+            created_at = 123
             """
 
         struct Config: Codable {
@@ -662,6 +662,160 @@ struct TOMLDecoderTests {
         #expect(config.userName == "john")
         #expect(config.userEmail == "john@example.com")
         #expect(config.createdAt == 123)
+    }
+
+    @Test func decodeConvertFromSnakeCaseREADMEExample() throws {
+        struct User: Codable {
+            var firstName: String  // Maps from first_name
+            var lastName: String  // Maps from last_name
+        }
+
+        let toml = """
+            first_name = "Ada"
+            last_name = "Lovelace"
+            """
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let user = try decoder.decode(User.self, from: toml)
+
+        #expect(user.firstName == "Ada")
+        #expect(user.lastName == "Lovelace")
+    }
+
+    @Test func decodeConvertFromSnakeCaseKeepsCamelCaseKeys() throws {
+        let toml = """
+            userName = "john"
+            [homeAddress]
+            postal_code = "12345"
+            """
+
+        struct Address: Codable {
+            let postalCode: String
+        }
+
+        struct Config: Codable {
+            let userName: String
+            let homeAddress: Address
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let config = try decoder.decode(Config.self, from: toml)
+
+        #expect(config.userName == "john")
+        #expect(config.homeAddress.postalCode == "12345")
+    }
+
+    @Test func decodeConvertFromSnakeCaseUnderscores() throws {
+        struct AnyKey: CodingKey {
+            var stringValue: String
+            var intValue: Int? { nil }
+            init(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+
+        struct Keys: Decodable {
+            let keys: [String]
+            init(from decoder: any Decoder) throws {
+                keys = try decoder.container(keyedBy: AnyKey.self).allKeys.map(\.stringValue).sorted()
+            }
+        }
+
+        let toml = """
+            _leading_underscore = 1
+            trailing_underscore_ = 2
+            __both__sides__ = 3
+            MY_VAR = 4
+            URL_value = 5
+            a__b = 6
+            _ = 7
+            __ = 8
+            """
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let keys = try decoder.decode(Keys.self, from: toml).keys
+
+        // These are the keys that `JSONDecoder` produces for the same input.
+        #expect(
+            keys == [
+                "_", "__", "__bothSides__", "_leadingUnderscore", "aB", "myVar", "trailingUnderscore_", "urlValue",
+            ]
+        )
+    }
+
+    @Test func decodeConvertFromSnakeCaseContains() throws {
+        struct Config: Decodable {
+            let hasFirstName: Bool
+            let hasSnakeCaseKey: Bool
+
+            enum CodingKeys: String, CodingKey {
+                case firstName
+                case snakeCaseKey = "first_name"
+            }
+
+            init(from decoder: any Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                hasFirstName = container.contains(.firstName)
+                hasSnakeCaseKey = container.contains(.snakeCaseKey)
+            }
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let config = try decoder.decode(Config.self, from: #"first_name = "Ada""#)
+
+        #expect(config.hasFirstName)
+        #expect(!config.hasSnakeCaseKey)
+    }
+
+    @Test func decodeConvertFromSnakeCaseMissingKey() throws {
+        struct User: Codable {
+            var firstName: String
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        do {
+            _ = try decoder.decode(User.self, from: #"last_name = "Lovelace""#)
+            Issue.record("Expected a decoding error")
+        } catch DecodingError.keyNotFound(let key, let context) {
+            #expect(key.stringValue == "firstName")
+            #expect(context.codingPath.isEmpty)
+        }
+    }
+
+    @Test func decodeConvertFromSnakeCaseDictionary() throws {
+        struct Service: Codable {
+            let displayName: String
+        }
+
+        struct Config: Codable {
+            let environment: [String: String]
+            let services: [String: Service]
+        }
+
+        let toml = """
+            [environment]
+            MY_VAR = "1"
+            other_var = "2"
+
+            [services.web_server]
+            display_name = "Web"
+            """
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let config = try decoder.decode(Config.self, from: toml)
+
+        // Like `JSONDecoder`, the strategy doesn't convert dictionary keys,
+        // but it converts the keys of the values in the dictionary.
+        #expect(config.environment == ["MY_VAR": "1", "other_var": "2"])
+        #expect(config.services["web_server"]?.displayName == "Web")
+
+        let topLevel = try decoder.decode([String: String].self, from: #"MY_VAR = "1""#)
+        #expect(topLevel == ["MY_VAR": "1"])
     }
 
     @Test func decodeUseDefaultKeys() throws {

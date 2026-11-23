@@ -91,6 +91,11 @@ public final class TOMLDecoder {
         /// Convert keys from snake_case to camelCase.
         ///
         /// For example, `user_name` in TOML becomes `userName` in Swift.
+        /// Leading and trailing underscores stay,
+        /// so `_user_name_` becomes `_userName_`.
+        ///
+        /// As with `JSONDecoder`, this strategy doesn't change the keys
+        /// of a dictionary with `String` keys, such as `[String: String]`.
         case convertFromSnakeCase
     }
 
@@ -239,8 +244,9 @@ public final class TOMLDecoder {
         }
 
         let value = try parseToValue(string)
-        let decoder = _TOMLDecoder(
-            value: value,
+        return try _TOMLDecoder.decode(
+            type,
+            from: value,
             codingPath: [],
             userInfo: userInfo.reduce(into: [:]) { $0[$1.key] = $1.value },
             options: DecodingOptions(
@@ -248,7 +254,6 @@ public final class TOMLDecoder {
                 keyDecodingStrategy: keyDecodingStrategy
             )
         )
-        return try T(from: decoder)
     }
 
     // MARK: - Private
@@ -552,11 +557,44 @@ final class _TOMLDecoder: Decoder {
     var userInfo: [CodingUserInfoKey: Any]
     let options: DecodingOptions
 
-    init(value: TOMLValue, codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any], options: DecodingOptions) {
+    /// Whether a keyed container for this value keeps the table's keys
+    /// instead of applying the key decoding strategy.
+    let keepsTableKeys: Bool
+
+    init(
+        value: TOMLValue,
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: DecodingOptions,
+        keepsTableKeys: Bool = false
+    ) {
         self.value = value
         self.codingPath = codingPath
         self.userInfo = userInfo
         self.options = options
+        self.keepsTableKeys = keepsTableKeys
+    }
+
+    /// Decodes a value of the given type from a TOML value.
+    ///
+    /// Like `JSONDecoder`, this doesn't apply the key decoding strategy
+    /// to the keys of a dictionary with `String` keys,
+    /// but it applies the strategy to the tables inside the dictionary.
+    static func decode<T: Decodable>(
+        _ type: T.Type,
+        from value: TOMLValue,
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: DecodingOptions
+    ) throws -> T {
+        let decoder = _TOMLDecoder(
+            value: value,
+            codingPath: codingPath,
+            userInfo: userInfo,
+            options: options,
+            keepsTableKeys: type is any StringKeyedDictionary.Type
+        )
+        return try T(from: decoder)
     }
 
     func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
@@ -571,10 +609,11 @@ final class _TOMLDecoder: Decoder {
         }
 
         let container = TOMLKeyedDecodingContainer<Key>(
-            dict: dict,
+            table: dict,
             codingPath: codingPath,
             userInfo: userInfo,
-            options: options
+            options: options,
+            convertsKeys: !keepsTableKeys
         )
         return KeyedDecodingContainer(container)
     }
@@ -609,6 +648,12 @@ final class _TOMLDecoder: Decoder {
 }
 
 // MARK: - Helpers
+
+/// A dictionary with `String` keys,
+/// whose keys the decoder keeps instead of applying the key decoding strategy.
+private protocol StringKeyedDictionary {}
+
+extension Dictionary: StringKeyedDictionary where Key == String {}
 
 private func valueTypeName(_ value: TOMLValue) -> String {
     switch value {
@@ -665,36 +710,66 @@ private func convertInteger<T: FixedWidthInteger>(
 // MARK: - Keyed Decoding Container
 
 private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContainerProtocol {
+    /// The table as it appears in the document.
+    let table: [String: TOMLValue]
+
+    /// The table with its keys converted by the key decoding strategy.
     let dict: [String: TOMLValue]
+
     var codingPath: [any CodingKey]
     let userInfo: [CodingUserInfoKey: Any]
     let options: DecodingOptions
+
+    /// Creates a container for a table.
+    ///
+    /// Like `JSONDecoder`, the container converts the table's keys
+    /// when it's created, and then looks up each coding key unchanged.
+    /// If two keys convert to the same key,
+    /// the container keeps the value of the key that is already in that form,
+    /// or else the value of the key that sorts first.
+    init(
+        table: [String: TOMLValue],
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: DecodingOptions,
+        convertsKeys: Bool = true
+    ) {
+        self.table = table
+        self.codingPath = codingPath
+        self.userInfo = userInfo
+        self.options = options
+
+        switch options.keyDecodingStrategy {
+        case .convertFromSnakeCase where convertsKeys:
+            var dict: [String: TOMLValue] = [:]
+            dict.reserveCapacity(table.count)
+            for key in table.keys.sorted() {
+                let converted = key.convertFromSnakeCase()
+                if dict[converted] == nil || converted == key {
+                    dict[converted] = table[key]
+                }
+            }
+            self.dict = dict
+        default:
+            self.dict = table
+        }
+    }
 
     var allKeys: [Key] {
         dict.keys.compactMap { Key(stringValue: $0) }
     }
 
     func contains(_ key: Key) -> Bool {
-        dict[convertKey(key)] != nil
-    }
-
-    private func convertKey(_ key: Key) -> String {
-        switch options.keyDecodingStrategy {
-        case .useDefaultKeys:
-            return key.stringValue
-        case .convertFromSnakeCase:
-            return key.stringValue.convertFromSnakeCase()
-        }
+        dict[key.stringValue] != nil
     }
 
     private func getValue(forKey key: Key) throws -> TOMLValue {
-        let keyString = convertKey(key)
-        guard let value = dict[keyString] else {
+        guard let value = dict[key.stringValue] else {
             throw DecodingError.keyNotFound(
                 key,
                 DecodingError.Context(
                     codingPath: codingPath,
-                    debugDescription: "Key '\(keyString)' not found"
+                    debugDescription: "Key '\(key.stringValue)' not found"
                 )
             )
         }
@@ -810,13 +885,13 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
             return try decodeURL(from: string, codingPath: codingPath + [key]) as! T
         }
 
-        let decoder = _TOMLDecoder(
-            value: value,
+        return try _TOMLDecoder.decode(
+            type,
+            from: value,
             codingPath: codingPath + [key],
             userInfo: userInfo,
             options: options
         )
-        return try T(from: decoder)
     }
 
     private func decodeDate(from value: TOMLValue, forKey key: Key) throws -> Date {
@@ -879,7 +954,7 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
         }
 
         let container = TOMLKeyedDecodingContainer<NestedKey>(
-            dict: dict,
+            table: dict,
             codingPath: codingPath + [key],
             userInfo: userInfo,
             options: options
@@ -903,7 +978,7 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
 
     func superDecoder() throws -> any Decoder {
         _TOMLDecoder(
-            value: .table(dict),
+            value: .table(table),
             codingPath: codingPath,
             userInfo: userInfo,
             options: options
@@ -1071,13 +1146,13 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
             ) as! T
         }
 
-        let decoder = _TOMLDecoder(
-            value: value,
+        return try _TOMLDecoder.decode(
+            type,
+            from: value,
             codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
             userInfo: userInfo,
             options: options
         )
-        return try T(from: decoder)
     }
 
     private func decodeDate(from value: TOMLValue) throws -> Date {
@@ -1130,7 +1205,7 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
         }
 
         let container = TOMLKeyedDecodingContainer<NestedKey>(
-            dict: dict,
+            table: dict,
             codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
             userInfo: userInfo,
             options: options
@@ -1284,13 +1359,13 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
             return try decodeURL(from: string, codingPath: codingPath) as! T
         }
 
-        let decoder = _TOMLDecoder(
-            value: value,
+        return try _TOMLDecoder.decode(
+            type,
+            from: value,
             codingPath: codingPath,
             userInfo: userInfo,
             options: options
         )
-        return try T(from: decoder)
     }
 
     private func decodeDate() throws -> Date {
@@ -1348,19 +1423,28 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
 // MARK: - String Extensions
 
 private extension String {
+    /// Converts a snake_case key to camelCase, as `JSONDecoder` does.
+    ///
+    /// The conversion lowercases the first word, capitalizes the other words,
+    /// and removes the underscores between them.
+    /// It keeps leading and trailing underscores,
+    /// and leaves a key without an underscore between words unchanged.
+    /// For example, `first_name` becomes `firstName`,
+    /// `_first_name_` becomes `_firstName_`, and `MY_VAR` becomes `myVar`.
     func convertFromSnakeCase() -> String {
-        var result = ""
-        var capitalizeNext = false
-        for char in self {
-            if char == "_" {
-                capitalizeNext = true
-            } else if capitalizeNext {
-                result += char.uppercased()
-                capitalizeNext = false
-            } else {
-                result.append(char)
-            }
+        guard let first = firstIndex(where: { $0 != "_" }) else {
+            return self
         }
-        return result
+        var last = index(before: endIndex)
+        while last > first && self[last] == "_" {
+            formIndex(before: &last)
+        }
+
+        let words = self[first ... last].split(separator: "_")
+        guard words.count > 1 else {
+            return self
+        }
+        let camelCase = ([words[0].lowercased()] + words.dropFirst().map(\.capitalized)).joined()
+        return String(self[..<first]) + camelCase + String(self[index(after: last)...])
     }
 }
