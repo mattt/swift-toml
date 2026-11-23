@@ -477,7 +477,7 @@ struct EncoderTests {
         arguments: [
             "userID", "URLSession", "myURLValue", "PATH", "a", "A", "_leading", "_Leading", "trailing_",
             "trailingX_", "alreadySnake_case", "version2Name", "v2URL", "x1Y2", "HTTPServer2Go", "aBC", "ABc",
-            "a_B", "__a__B", "", "fooÜber", "ÉtéÀ",
+            "a_B", "__a__B", "", "fooÜber", "ÉtéÀ", "aA\u{0301}b", "\u{0600}Aa", "aA\u{0600}b", "e\u{0301}Ab",
         ]
     )
     func convertToSnakeCaseMatchesJSONEncoder(key: String) throws {
@@ -489,6 +489,18 @@ struct EncoderTests {
         let toml = try TOMLDecoder().decode([String: Int].self, from: tomlEncoder.encode(SingleKey(key: key)))
         let json = try JSONDecoder().decode([String: Int].self, from: jsonEncoder.encode(SingleKey(key: key)))
         #expect(Array(toml.keys) == Array(json.keys))
+    }
+
+    /// `JSONEncoder` stops with a fatal error for this key,
+    /// because the character before the lowercase letter starts before the uppercase letter.
+    @Test func convertToSnakeCaseCharacterBeforeLowercaseStartsEarlier() throws {
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let toml = try TOMLDecoder().decode(
+            [String: Int].self,
+            from: encoder.encode(SingleKey(key: "a\u{0600}A\u{0600}a"))
+        )
+        #expect(Array(toml.keys) == ["a\u{0600}_a\u{0600}a"])
     }
 
     @Test func convertToSnakeCaseAcronyms() throws {

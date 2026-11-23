@@ -120,6 +120,12 @@ public final class TOMLEncoder {
         /// To round-trip such a property under both strategies,
         /// give it an explicit `CodingKeys` raw value that each strategy converts to the other,
         /// such as `case userID = "userId"`.
+        ///
+        /// Unlike `JSONEncoder`, this strategy also converts the keys
+        /// of a dictionary with `String` keys, such as `[String: Int]`.
+        /// ``TOMLDecoder`` doesn't convert those keys back,
+        /// so they don't round-trip with
+        /// ``TOMLDecoder/KeyDecodingStrategy/convertFromSnakeCase``.
         case convertToSnakeCase
     }
 
@@ -1272,38 +1278,46 @@ private extension String {
     ///
     /// For example, `userID` becomes `user_id`, `myURLValue` becomes `my_url_value`,
     /// `URLSession` becomes `u_rl_session`, and `PATH` becomes `p_ath`.
+    ///
+    /// Like Foundation, the conversion tests Unicode scalars for letters,
+    /// but it moves by characters to skip the first character
+    /// and to find the characters next to a letter,
+    /// so it doesn't separate an accent from its letter.
+    /// These methods round an index inside a character down to the start of the character.
     func convertToSnakeCase() -> String {
-        let scalars = unicodeScalars
-        guard !scalars.isEmpty else { return self }
+        guard !isEmpty else { return self }
 
         var words: [Range<String.Index>] = []
-        var wordStart = scalars.startIndex
-        var searchStart = scalars.index(after: wordStart)
+        var wordStart = startIndex
+        var searchStart = index(after: wordStart)
 
-        while let upper = scalars[searchStart...].firstIndex(where: \.isUppercaseLetter) {
+        while let upper = self[searchStart...].unicodeScalars.firstIndex(where: \.isUppercaseLetter) {
             words.append(wordStart ..< upper)
 
-            guard let lower = scalars[upper...].firstIndex(where: \.isLowercaseLetter) else {
+            guard let lower = self[upper...].unicodeScalars.firstIndex(where: \.isLowercaseLetter) else {
                 // No lowercase letters follow, so the rest of the key is one word.
                 wordStart = upper
                 break
             }
 
-            if lower == scalars.index(after: upper) {
+            let beforeLower = index(before: lower)
+            if lower == index(after: upper) || beforeLower < upper {
                 // A lowercase letter follows the uppercase letter, so they're in one word.
+                // The character before the lowercase letter can also start before the uppercase letter,
+                // such as in `"a\u{0600}A\u{0600}a"`, where `JSONEncoder` stops with a fatal error;
+                // the conversion doesn't start a word there.
                 wordStart = upper
             } else {
                 // A run of uppercase letters is a word,
-                // except for its last letter, which starts the next word.
-                let beforeLower = scalars.index(before: lower)
+                // except for its last character, which starts the next word.
                 words.append(upper ..< beforeLower)
                 wordStart = beforeLower
             }
-            searchStart = scalars.index(after: lower)
+            searchStart = unicodeScalars.index(after: lower)
         }
-        words.append(wordStart ..< scalars.endIndex)
+        words.append(wordStart ..< endIndex)
 
-        return words.map { String(scalars[$0]).lowercased() }.joined(separator: "_")
+        return words.map { self[$0].lowercased() }.joined(separator: "_")
     }
 }
 
