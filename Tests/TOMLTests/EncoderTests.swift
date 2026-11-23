@@ -338,13 +338,22 @@ struct EncoderTests {
         #expect(toml.contains("1000"))
     }
 
+    /// Returns the date for Gregorian components in the current time zone,
+    /// which the local date encoding strategies use,
+    /// whatever calendar system the user has chosen.
+    private func localDate(from components: DateComponents) throws -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = Calendar.current.timeZone
+        return try #require(calendar.date(from: components))
+    }
+
     @Test func encodeDateLocalDateTime() throws {
         struct DateConfig: Codable {
             let timestamp: Date
         }
 
         let components = DateComponents(year: 2024, month: 6, day: 15, hour: 10, minute: 30, second: 0)
-        let date = Calendar.current.date(from: components)!
+        let date = try localDate(from: components)
         let config = DateConfig(timestamp: date)
         let encoder = TOMLEncoder()
         encoder.dateEncodingStrategy = .localDateTime
@@ -359,7 +368,7 @@ struct EncoderTests {
         }
 
         let components = DateComponents(year: 2024, month: 6, day: 15)
-        let date = Calendar.current.date(from: components)!
+        let date = try localDate(from: components)
         let config = DateConfig(timestamp: date)
         let encoder = TOMLEncoder()
         encoder.dateEncodingStrategy = .localDate
@@ -374,7 +383,7 @@ struct EncoderTests {
         }
 
         let components = DateComponents(year: 2024, month: 6, day: 15, hour: 10, minute: 30, second: 45)
-        let date = Calendar.current.date(from: components)!
+        let date = try localDate(from: components)
         let config = DateConfig(timestamp: date)
         let encoder = TOMLEncoder()
         encoder.dateEncodingStrategy = .localTime
