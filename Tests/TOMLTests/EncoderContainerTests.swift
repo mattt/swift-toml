@@ -120,6 +120,142 @@ struct EncoderContainerTests {
         let data = try TOMLEncoder().encode(DeepContainers())
         #expect(try TOMLDecoder().decode(DeepContainers.self, from: data) == DeepContainers())
     }
+
+    // MARK: - Repeated Containers
+
+    /// Asks one encoder for a keyed container twice.
+    struct TwoKeyedContainers: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case a, b
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var first = encoder.container(keyedBy: CodingKeys.self)
+            try first.encode(1, forKey: .a)
+            var second = encoder.container(keyedBy: CodingKeys.self)
+            try second.encode(2, forKey: .b)
+        }
+    }
+
+    /// Asks one encoder for an unkeyed container twice.
+    struct TwoUnkeyedContainers: Encodable {
+        func encode(to encoder: any Encoder) throws {
+            var first = encoder.unkeyedContainer()
+            try first.encode(1)
+            var second = encoder.unkeyedContainer()
+            try second.encode(2)
+        }
+    }
+
+    struct Wrapper<Value: Encodable>: Encodable {
+        let value: Value
+    }
+
+    @Test func secondContainerKeepsFirstContainersValues() throws {
+        #expect(
+            try expectSameStructure(TwoKeyedContainers()) == .table(["a": .integer(1), "b": .integer(2)])
+        )
+        #expect(
+            try expectSameStructure(Wrapper(value: TwoUnkeyedContainers()))
+                == .table(["value": .array([.integer(1), .integer(2)])])
+        )
+    }
+
+    /// Writes one key twice, and writes a table or an array at a key
+    /// before it asks for a nested container there.
+    ///
+    /// The array value comes from an unkeyed container,
+    /// because `JSONEncoder` writes some arrays, such as `[Int]`, in a way
+    /// that it can't reopen as a nested container.
+    struct RepeatedKeys: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case x, outer, list
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(1, forKey: .x)
+            try container.encode(2, forKey: .x)
+            try container.encode(["x": 3], forKey: .outer)
+            var outer = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .outer)
+            try outer.encode(4, forKey: .list)
+            var again = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .outer)
+            try again.encode(5, forKey: .x)
+            try container.encode(TwoUnkeyedContainers(), forKey: .list)
+            var list = container.nestedUnkeyedContainer(forKey: .list)
+            try list.encode(3)
+        }
+    }
+
+    @Test func repeatedKeysMatchJSONEncoder() throws {
+        let tree = try expectSameStructure(RepeatedKeys())
+        #expect(
+            tree
+                == .table([
+                    "x": .integer(2),
+                    "outer": .table(["x": .integer(5), "list": .integer(4)]),
+                    "list": .array([.integer(1), .integer(2), .integer(3)]),
+                ])
+        )
+    }
+
+    /// Asks one encoder for a keyed container and then an unkeyed container,
+    /// which `JSONEncoder` doesn't allow.
+    struct KeyedThenUnkeyed: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case a
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var keyed = encoder.container(keyedBy: CodingKeys.self)
+            try keyed.encode(1, forKey: .a)
+            var unkeyed = encoder.unkeyedContainer()
+            try unkeyed.encode(2)
+        }
+    }
+
+    /// Writes a value at a key,
+    /// then asks for a nested keyed container at that key,
+    /// which `JSONEncoder` doesn't allow.
+    struct ValueThenNestedContainer: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case a
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(1, forKey: .a)
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .a)
+            try nested.encode(2, forKey: .a)
+        }
+    }
+
+    @Test func conflictingContainersThrow() {
+        expectInvalidValue(codingPath: []) {
+            try TOMLEncoder().encode(KeyedThenUnkeyed())
+        }
+        expectInvalidValue(codingPath: ["a"]) {
+            try TOMLEncoder().encode(ValueThenNestedContainer())
+        }
+    }
+
+    private func expectInvalidValue(
+        codingPath expectedPath: [String],
+        sourceLocation: SourceLocation = #_sourceLocation,
+        _ body: () throws -> Data
+    ) {
+        do {
+            let data = try body()
+            Issue.record(
+                "Expected an encoding error, got \(String(decoding: data, as: UTF8.self))",
+                sourceLocation: sourceLocation
+            )
+        } catch TOMLEncodingError.invalidValue(_, let codingPath) {
+            #expect(codingPath.map(\.stringValue) == expectedPath, sourceLocation: sourceLocation)
+        } catch {
+            Issue.record("Unexpected error: \(error)", sourceLocation: sourceLocation)
+        }
+    }
 }
 
 // MARK: - Structure Comparison
