@@ -1080,6 +1080,20 @@ struct TOMLDecoderTests {
         }
     }
 
+    @Test func rejectsTableHeaderForTableDefinedByDottedKey() throws {
+        let toml = """
+            [a]
+            b.c = 1
+            [a.b]
+            """
+
+        #expect {
+            try TOMLDecoder().decode([String: [String: [String: Int]]].self, from: toml)
+        } throws: { error in
+            isInvalidSyntax(error)
+        }
+    }
+
     // MARK: - Error Descriptions
 
     @Test func errorDescriptionInvalidSyntax() {
