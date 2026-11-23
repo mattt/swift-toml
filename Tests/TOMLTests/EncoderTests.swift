@@ -1058,12 +1058,16 @@ struct EncoderTests {
         #expect(error.description.contains("bad value"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionUnsupportedType() {
         let error = TOMLEncodingError.unsupportedType("CustomType", codingPath: [])
         #expect(error.description.contains("Unsupported type"))
         #expect(error.description.contains("CustomType"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionUnsupportedTypeWithPath() {
         struct TestKey: CodingKey {
             var stringValue: String
@@ -1079,6 +1083,8 @@ struct EncoderTests {
         #expect(error.description.contains("BadType"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionInvalidKey() {
         let error = TOMLEncodingError.invalidKey("bad key!")
         #expect(error.description.contains("Invalid TOML key"))

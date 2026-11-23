@@ -225,8 +225,11 @@ public final class TOMLDecoder {
     ///   - data: UTF-8 encoded TOML data.
     ///     The data can start with one UTF-8 byte order mark.
     /// - Returns: The decoded value.
-    /// - Throws: ``TOMLDecodingError`` if parsing or decoding fails,
-    ///   or if `data` is not valid UTF-8.
+    /// - Throws: ``TOMLDecodingError`` if `data` is larger than ``DecodingLimits/maxInputSize``,
+    ///   isn't valid UTF-8, has invalid TOML syntax, or exceeds another decoding limit.
+    ///   `DecodingError` if the document doesn't match `type`,
+    ///   such as a value of another type, a missing key,
+    ///   or an integer that doesn't fit in the property's type.
     public func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         if data.count > limits.maxInputSize {
             throw TOMLDecodingError.invalidData("Input exceeds maximum size of \(limits.maxInputSize) bytes")
@@ -249,7 +252,11 @@ public final class TOMLDecoder {
     ///   - type: The type to decode.
     ///   - string: A string containing TOML content.
     /// - Returns: The decoded value.
-    /// - Throws: ``TOMLDecodingError`` if parsing or decoding fails.
+    /// - Throws: ``TOMLDecodingError`` if `string` is larger than ``DecodingLimits/maxInputSize``,
+    ///   has invalid TOML syntax, or exceeds another decoding limit.
+    ///   `DecodingError` if the document doesn't match `type`,
+    ///   such as a value of another type, a missing key,
+    ///   or an integer that doesn't fit in the property's type.
     public func decode<T: Decodable>(_ type: T.Type, from string: String) throws -> T {
         if string.utf8.count > limits.maxInputSize {
             throw TOMLDecodingError.invalidData("Input exceeds maximum size of \(limits.maxInputSize) bytes")
@@ -519,30 +526,54 @@ public final class TOMLDecoder {
 
 // MARK: - Decoding Errors
 
-/// Errors that can occur during TOML decoding.
+/// Errors that can occur when ``TOMLDecoder`` reads a TOML document.
+///
+/// ``TOMLDecoder`` throws these errors for input that it can't parse
+/// or that exceeds its limits.
+/// When a document doesn't match the type to decode,
+/// it throws Swift's `DecodingError`, as `JSONDecoder` does.
 public enum TOMLDecodingError: Error, CustomStringConvertible, Sendable {
     /// Invalid TOML syntax at the specified location.
     case invalidSyntax(line: Int, column: Int, message: String)
 
     /// Type mismatch during decoding.
+    @available(*, deprecated, message: "TOMLDecoder never throws this error; it throws DecodingError.typeMismatch")
     case typeMismatch(expected: String, found: String, codingPath: [any CodingKey])
 
     /// Required key not found in the table.
+    @available(*, deprecated, message: "TOMLDecoder never throws this error; it throws DecodingError.keyNotFound")
     case keyNotFound(key: any CodingKey, availableKeys: [String])
 
     /// Expected value not found at the specified path.
+    @available(*, deprecated, message: "TOMLDecoder never throws this error; it throws DecodingError.valueNotFound")
     case valueNotFound(type: String, codingPath: [any CodingKey])
 
     /// Data is corrupted or invalid.
+    @available(*, deprecated, message: "TOMLDecoder never throws this error; it throws DecodingError.dataCorrupted")
     case dataCorrupted(message: String, codingPath: [any CodingKey])
 
-    /// The input data is invalid.
+    /// The input is too large, isn't valid UTF-8, or exceeds a decoding limit,
+    /// or the parser reports an error without a location.
     case invalidData(String)
 
     public var description: String {
         switch self {
         case .invalidSyntax(let line, let column, let message):
             return "Invalid TOML syntax at line \(line), column \(column): \(message)"
+        case .invalidData(let message):
+            return "Invalid data: \(message)"
+        default:
+            // Read the deprecated cases' descriptions through a protocol,
+            // so that this switch doesn't use them and cause deprecation warnings.
+            return (self as any DeprecatedCaseDescribing).deprecatedCaseDescription
+        }
+    }
+}
+
+extension TOMLDecodingError: DeprecatedCaseDescribing {
+    @available(*, deprecated)
+    var deprecatedCaseDescription: String {
+        switch self {
         case .typeMismatch(let expected, let found, let codingPath):
             let path = codingPath.map(\.stringValue).joined(separator: ".")
             return "Type mismatch at '\(path)': expected \(expected), found \(found)"
@@ -554,8 +585,8 @@ public enum TOMLDecodingError: Error, CustomStringConvertible, Sendable {
         case .dataCorrupted(let message, let codingPath):
             let path = codingPath.map(\.stringValue).joined(separator: ".")
             return "Data corrupted at '\(path)': \(message)"
-        case .invalidData(let message):
-            return "Invalid data: \(message)"
+        case .invalidSyntax, .invalidData:
+            return description
         }
     }
 }

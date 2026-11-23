@@ -1298,6 +1298,40 @@ struct TOMLDecoderTests {
         }
     }
 
+    // MARK: - Error Types
+
+    struct Server: Decodable {
+        let host: String
+        let port: Int
+    }
+
+    @Test func typeMismatchThrowsDecodingError() {
+        #expect {
+            try TOMLDecoder().decode(Server.self, from: #"host = "localhost"\#nport = "80""#)
+        } throws: { error in
+            guard case .typeMismatch(_, let context) = error as? DecodingError else { return false }
+            return context.codingPath.map(\.stringValue) == ["port"]
+        }
+    }
+
+    @Test func missingKeyThrowsDecodingError() {
+        #expect {
+            try TOMLDecoder().decode(Server.self, from: #"host = "localhost""#)
+        } throws: { error in
+            guard case .keyNotFound(let key, _) = error as? DecodingError else { return false }
+            return key.stringValue == "port"
+        }
+    }
+
+    @Test func syntaxErrorThrowsInvalidSyntax() {
+        #expect {
+            try TOMLDecoder().decode(Server.self, from: "host = \nport = 80")
+        } throws: { error in
+            guard case .invalidSyntax(let line, _, _) = error as? TOMLDecodingError else { return false }
+            return line == 1
+        }
+    }
+
     // MARK: - Error Descriptions
 
     @Test func errorDescriptionInvalidSyntax() {
@@ -1306,12 +1340,16 @@ struct TOMLDecoderTests {
         #expect(error.description.contains("column 10"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionTypeMismatch() {
         let error = TOMLDecodingError.typeMismatch(expected: "String", found: "Integer", codingPath: [])
         #expect(error.description.contains("String"))
         #expect(error.description.contains("Integer"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionKeyNotFound() {
         struct TestKey: CodingKey {
             var stringValue: String
@@ -1323,11 +1361,15 @@ struct TOMLDecoderTests {
         #expect(error.description.contains("missing"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionValueNotFound() {
         let error = TOMLDecodingError.valueNotFound(type: "String", codingPath: [])
         #expect(error.description.contains("String"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionDataCorrupted() {
         let error = TOMLDecodingError.dataCorrupted(message: "corrupted", codingPath: [])
         #expect(error.description.contains("corrupted"))

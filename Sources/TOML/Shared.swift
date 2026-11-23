@@ -17,3 +17,11 @@ struct TOMLCodingKey: CodingKey {
         self.intValue = index
     }
 }
+
+/// A type whose deprecated cases have a description.
+///
+/// A call through this protocol to a deprecated implementation
+/// doesn't cause a deprecation warning.
+protocol DeprecatedCaseDescribing {
+    var deprecatedCaseDescription: String { get }
+}

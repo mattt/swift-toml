@@ -211,7 +211,11 @@ public final class TOMLEncoder {
     ///
     /// - Parameter value: An `Encodable` value to convert to TOML format.
     /// - Returns: UTF-8 encoded data containing the TOML representation.
-    /// - Throws: ``TOMLEncodingError`` if encoding fails.
+    /// - Throws: ``TOMLEncodingError/invalidValue(_:codingPath:)``
+    ///   for a value that TOML can't represent,
+    ///   such as an integer greater than `Int64.max`
+    ///   or a top-level value that isn't a table,
+    ///   and any error that a value's `encode(to:)` method throws.
     public func encode<T: Encodable>(_ value: T) throws -> Data {
         let string = try encodeToString(value)
         guard let data = string.data(using: .utf8) else {
@@ -224,7 +228,11 @@ public final class TOMLEncoder {
     ///
     /// - Parameter value: An `Encodable` value to convert to TOML format.
     /// - Returns: A string containing the TOML representation.
-    /// - Throws: ``TOMLEncodingError`` if encoding fails.
+    /// - Throws: ``TOMLEncodingError/invalidValue(_:codingPath:)``
+    ///   for a value that TOML can't represent,
+    ///   such as an integer greater than `Int64.max`
+    ///   or a top-level value that isn't a table,
+    ///   and any error that a value's `encode(to:)` method throws.
     public func encodeToString<T: Encodable>(_ value: T) throws -> String {
         let encoder = _TOMLEncoder(
             codingPath: [],
@@ -455,9 +463,19 @@ public enum TOMLEncodingError: Error, CustomStringConvertible, Sendable {
     case invalidValue(String, codingPath: [any CodingKey])
 
     /// The type is not supported for TOML encoding.
+    @available(
+        *,
+        deprecated,
+        message: "TOMLEncoder never throws this error; it throws invalidValue for a value that TOML can't represent"
+    )
     case unsupportedType(String, codingPath: [any CodingKey])
 
     /// The key is not valid for TOML.
+    @available(
+        *,
+        deprecated,
+        message: "TOMLEncoder never throws this error; it quotes keys as needed and throws only invalidValue"
+    )
     case invalidKey(String)
 
     public var description: String {
@@ -465,11 +483,25 @@ public enum TOMLEncodingError: Error, CustomStringConvertible, Sendable {
         case .invalidValue(let message, let codingPath):
             let path = codingPath.map(\.stringValue).joined(separator: ".")
             return "Invalid value at '\(path)': \(message)"
+        default:
+            // Read the deprecated cases' descriptions through a protocol,
+            // so that this switch doesn't use them and cause deprecation warnings.
+            return (self as any DeprecatedCaseDescribing).deprecatedCaseDescription
+        }
+    }
+}
+
+extension TOMLEncodingError: DeprecatedCaseDescribing {
+    @available(*, deprecated)
+    var deprecatedCaseDescription: String {
+        switch self {
         case .unsupportedType(let type, let codingPath):
             let path = codingPath.map(\.stringValue).joined(separator: ".")
             return "Unsupported type '\(type)' at '\(path)'"
         case .invalidKey(let key):
             return "Invalid TOML key: '\(key)'"
+        case .invalidValue:
+            return description
         }
     }
 }
