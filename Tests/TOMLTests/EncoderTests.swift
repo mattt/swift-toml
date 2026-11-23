@@ -338,13 +338,22 @@ struct EncoderTests {
         #expect(toml.contains("1000"))
     }
 
+    /// Returns the date for Gregorian components in the current time zone,
+    /// which the local date encoding strategies use,
+    /// whatever calendar system the user has chosen.
+    private func localDate(from components: DateComponents) throws -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = Calendar.current.timeZone
+        return try #require(calendar.date(from: components))
+    }
+
     @Test func encodeDateLocalDateTime() throws {
         struct DateConfig: Codable {
             let timestamp: Date
         }
 
         let components = DateComponents(year: 2024, month: 6, day: 15, hour: 10, minute: 30, second: 0)
-        let date = Calendar.current.date(from: components)!
+        let date = try localDate(from: components)
         let config = DateConfig(timestamp: date)
         let encoder = TOMLEncoder()
         encoder.dateEncodingStrategy = .localDateTime
@@ -359,7 +368,7 @@ struct EncoderTests {
         }
 
         let components = DateComponents(year: 2024, month: 6, day: 15)
-        let date = Calendar.current.date(from: components)!
+        let date = try localDate(from: components)
         let config = DateConfig(timestamp: date)
         let encoder = TOMLEncoder()
         encoder.dateEncodingStrategy = .localDate
@@ -374,7 +383,7 @@ struct EncoderTests {
         }
 
         let components = DateComponents(year: 2024, month: 6, day: 15, hour: 10, minute: 30, second: 45)
-        let date = Calendar.current.date(from: components)!
+        let date = try localDate(from: components)
         let config = DateConfig(timestamp: date)
         let encoder = TOMLEncoder()
         encoder.dateEncodingStrategy = .localTime
@@ -511,6 +520,46 @@ struct EncoderTests {
         let data = try encoder.encode(config)
 
         #expect(String(data: data, encoding: .utf8)?.contains("name = \"test\"") == true)
+    }
+
+    // MARK: - Top-Level Values
+
+    /// Checks that encoding `value` throws because it isn't a table.
+    private func expectTopLevelError<T: Encodable>(_ value: T, found: String) {
+        let encoder = TOMLEncoder()
+        let encodings: [() throws -> Void] = [
+            { _ = try encoder.encode(value) },
+            { _ = try encoder.encodeToString(value) },
+        ]
+        for encode in encodings {
+            do {
+                try encode()
+                Issue.record("Expected an encoding error for \(value)")
+            } catch TOMLEncodingError.invalidValue(let message, let codingPath) {
+                #expect(message == "Top-level value must encode as a table, not \(found)")
+                #expect(codingPath.isEmpty)
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test func encodeTopLevelArrayThrows() {
+        expectTopLevelError([1, 2, 3], found: "an array")
+    }
+
+    @Test func encodeTopLevelIntegerThrows() {
+        expectTopLevelError(42, found: "an integer")
+    }
+
+    @Test func encodeTopLevelStringThrows() {
+        expectTopLevelError("hi", found: "a string")
+    }
+
+    @Test func encodeTopLevelEmptyTable() throws {
+        struct Empty: Encodable {}
+        #expect(try TOMLEncoder().encodeToString(Empty()) == "")
+        #expect(try TOMLEncoder().encodeToString([String: Int]()) == "")
     }
 
     // MARK: - User Info

@@ -66,15 +66,27 @@ public final class TOMLDecoder {
     /// TOML natively supports date-time values, which are decoded according
     /// to this strategy.
     public enum DateDecodingStrategy: Sendable {
-        /// Decode dates from ISO 8601 formatted strings or TOML offset date-times.
+        /// Decode dates from TOML date-time values.
         ///
-        /// This is the default strategy and works with TOML's native date-time types.
+        /// An offset date-time decodes as the instant that it names.
+        /// A local date-time decodes as that time in the current time zone,
+        /// and a local date decodes as midnight at the start of that day
+        /// in the current time zone.
+        /// This strategy doesn't parse strings.
+        ///
+        /// This is the default strategy.
         case iso8601
 
-        /// Decode dates from a floating-point number of seconds since January 1, 1970.
+        /// Decode dates from a number of seconds since January 1, 1970,
+        /// written as an integer or a float.
+        ///
+        /// This strategy also decodes TOML date-time values, as ``iso8601`` does.
         case secondsSince1970
 
-        /// Decode dates from a floating-point number of milliseconds since January 1, 1970.
+        /// Decode dates from a number of milliseconds since January 1, 1970,
+        /// written as an integer or a float.
+        ///
+        /// This strategy also decodes TOML date-time values, as ``iso8601`` does.
         case millisecondsSince1970
     }
 
@@ -91,6 +103,11 @@ public final class TOMLDecoder {
         /// Convert keys from snake_case to camelCase.
         ///
         /// For example, `user_name` in TOML becomes `userName` in Swift.
+        /// Leading and trailing underscores stay,
+        /// so `_user_name_` becomes `_userName_`.
+        ///
+        /// As with `JSONDecoder`, this strategy doesn't change the keys
+        /// of a dictionary with `String` keys, such as `[String: String]`.
         case convertFromSnakeCase
     }
 
@@ -239,8 +256,9 @@ public final class TOMLDecoder {
         }
 
         let value = try parseToValue(string)
-        let decoder = _TOMLDecoder(
-            value: value,
+        return try _TOMLDecoder.decode(
+            type,
+            from: value,
             codingPath: [],
             userInfo: userInfo.reduce(into: [:]) { $0[$1.key] = $1.value },
             options: DecodingOptions(
@@ -248,7 +266,6 @@ public final class TOMLDecoder {
                 keyDecodingStrategy: keyDecodingStrategy
             )
         )
-        return try T(from: decoder)
     }
 
     // MARK: - Private
@@ -465,11 +482,17 @@ public final class TOMLDecoder {
                 components.minute = Int(dt.time.minute)
                 components.second = Int(dt.time.second)
                 components.nanosecond = Int(dt.time.nanosecond)
-                components.timeZone = TimeZone(secondsFromGMT: Int(dt.offset_minutes) * 60)
 
-                if let date = Calendar(identifier: .gregorian).date(from: components) {
-                    return .offsetDateTime(date)
+                // `TimeZone(secondsFromGMT:)` rejects offsets above 18 hours,
+                // but TOML allows offsets up to 23:59,
+                // so read the components as UTC and then apply the offset.
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+                guard let utcDate = calendar.date(from: components) else {
+                    throw TOMLDecodingError.invalidData("Offset date-time is not a valid date")
                 }
+                let offset = TimeInterval(Int(dt.offset_minutes) * 60)
+                return .offsetDateTime(utcDate.addingTimeInterval(-offset))
             }
             return .localDateTime(
                 LocalDateTime(
@@ -552,11 +575,44 @@ final class _TOMLDecoder: Decoder {
     var userInfo: [CodingUserInfoKey: Any]
     let options: DecodingOptions
 
-    init(value: TOMLValue, codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any], options: DecodingOptions) {
+    /// Whether a keyed container for this value keeps the table's keys
+    /// instead of applying the key decoding strategy.
+    let keepsTableKeys: Bool
+
+    init(
+        value: TOMLValue,
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: DecodingOptions,
+        keepsTableKeys: Bool = false
+    ) {
         self.value = value
         self.codingPath = codingPath
         self.userInfo = userInfo
         self.options = options
+        self.keepsTableKeys = keepsTableKeys
+    }
+
+    /// Decodes a value of the given type from a TOML value.
+    ///
+    /// Like `JSONDecoder`, this doesn't apply the key decoding strategy
+    /// to the keys of a dictionary with `String` keys,
+    /// but it applies the strategy to the tables inside the dictionary.
+    static func decode<T: Decodable>(
+        _ type: T.Type,
+        from value: TOMLValue,
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: DecodingOptions
+    ) throws -> T {
+        let decoder = _TOMLDecoder(
+            value: value,
+            codingPath: codingPath,
+            userInfo: userInfo,
+            options: options,
+            keepsTableKeys: type is any StringKeyedDictionary.Type
+        )
+        return try T(from: decoder)
     }
 
     func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
@@ -571,10 +627,11 @@ final class _TOMLDecoder: Decoder {
         }
 
         let container = TOMLKeyedDecodingContainer<Key>(
-            dict: dict,
+            table: dict,
             codingPath: codingPath,
             userInfo: userInfo,
-            options: options
+            options: options,
+            convertsKeys: !keepsTableKeys
         )
         return KeyedDecodingContainer(container)
     }
@@ -610,6 +667,12 @@ final class _TOMLDecoder: Decoder {
 
 // MARK: - Helpers
 
+/// A dictionary with `String` keys,
+/// whose keys the decoder keeps instead of applying the key decoding strategy.
+private protocol StringKeyedDictionary {}
+
+extension Dictionary: StringKeyedDictionary where Key == String {}
+
 private func valueTypeName(_ value: TOMLValue) -> String {
     switch value {
     case .string: return "string"
@@ -642,39 +705,155 @@ private func decodeURL(from string: String, codingPath: [any CodingKey]) throws 
     return url
 }
 
+/// Decodes a `Date` from a TOML value with the given strategy.
+///
+/// Every strategy decodes TOML offset date-times, local date-times, and local dates.
+/// The numeric strategies also decode integers and floats.
+private func decodeDate(
+    from value: TOMLValue,
+    strategy: TOMLDecoder.DateDecodingStrategy,
+    codingPath: [any CodingKey]
+) throws -> Date {
+    let typeMismatch = DecodingError.typeMismatch(
+        Date.self,
+        DecodingError.Context(
+            codingPath: codingPath,
+            debugDescription: "Expected \(Date.self), found \(valueTypeName(value))"
+        )
+    )
+
+    let number: Double
+    switch value {
+    case .offsetDateTime(let date):
+        return date
+    case .localDateTime(let dt):
+        let components = DateComponents(
+            year: dt.year,
+            month: dt.month,
+            day: dt.day,
+            hour: dt.hour,
+            minute: dt.minute,
+            second: dt.second,
+            nanosecond: dt.nanosecond
+        )
+        return try localDate(from: components, codingPath: codingPath)
+    case .localDate(let d):
+        let components = DateComponents(year: d.year, month: d.month, day: d.day)
+        return try localDate(from: components, codingPath: codingPath)
+    case .integer(let i):
+        number = Double(i)
+    case .float(let f):
+        number = f
+    default:
+        throw typeMismatch
+    }
+
+    switch strategy {
+    case .secondsSince1970:
+        return Date(timeIntervalSince1970: number)
+    case .millisecondsSince1970:
+        return Date(timeIntervalSince1970: number / 1000)
+    case .iso8601:
+        throw typeMismatch
+    }
+}
+
+/// Creates a date from components in the current time zone.
+private func localDate(from components: DateComponents, codingPath: [any CodingKey]) throws -> Date {
+    guard let date = Calendar(identifier: .gregorian).date(from: components) else {
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: codingPath,
+                debugDescription: "Invalid date components"
+            )
+        )
+    }
+    return date
+}
+
+/// Converts a TOML integer to the requested integer type.
+///
+/// Like `JSONDecoder`, this throws instead of trapping
+/// when the value doesn't fit in the type.
+private func convertInteger<T: FixedWidthInteger>(
+    _ value: Int64,
+    to type: T.Type,
+    codingPath: [any CodingKey]
+) throws -> T {
+    guard let result = T(exactly: value) else {
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: codingPath,
+                debugDescription: "Number \(value) is not representable as \(type)"
+            )
+        )
+    }
+    return result
+}
+
 // MARK: - Keyed Decoding Container
 
 private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContainerProtocol {
+    /// The table as it appears in the document.
+    let table: [String: TOMLValue]
+
+    /// The table with its keys converted by the key decoding strategy.
     let dict: [String: TOMLValue]
+
     var codingPath: [any CodingKey]
     let userInfo: [CodingUserInfoKey: Any]
     let options: DecodingOptions
+
+    /// Creates a container for a table.
+    ///
+    /// Like `JSONDecoder`, the container converts the table's keys
+    /// when it's created, and then looks up each coding key unchanged.
+    /// If two keys convert to the same key,
+    /// the container keeps the value of the key that is already in that form,
+    /// or else the value of the key that sorts first.
+    init(
+        table: [String: TOMLValue],
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: DecodingOptions,
+        convertsKeys: Bool = true
+    ) {
+        self.table = table
+        self.codingPath = codingPath
+        self.userInfo = userInfo
+        self.options = options
+
+        switch options.keyDecodingStrategy {
+        case .convertFromSnakeCase where convertsKeys:
+            var dict: [String: TOMLValue] = [:]
+            dict.reserveCapacity(table.count)
+            for key in table.keys.sorted() {
+                let converted = key.convertFromSnakeCase()
+                if dict[converted] == nil || converted == key {
+                    dict[converted] = table[key]
+                }
+            }
+            self.dict = dict
+        default:
+            self.dict = table
+        }
+    }
 
     var allKeys: [Key] {
         dict.keys.compactMap { Key(stringValue: $0) }
     }
 
     func contains(_ key: Key) -> Bool {
-        dict[convertKey(key)] != nil
-    }
-
-    private func convertKey(_ key: Key) -> String {
-        switch options.keyDecodingStrategy {
-        case .useDefaultKeys:
-            return key.stringValue
-        case .convertFromSnakeCase:
-            return key.stringValue.convertFromSnakeCase()
-        }
+        dict[key.stringValue] != nil
     }
 
     private func getValue(forKey key: Key) throws -> TOMLValue {
-        let keyString = convertKey(key)
-        guard let value = dict[keyString] else {
+        guard let value = dict[key.stringValue] else {
             throw DecodingError.keyNotFound(
                 key,
                 DecodingError.Context(
                     codingPath: codingPath,
-                    debugDescription: "Key '\(keyString)' not found"
+                    debugDescription: "Key '\(key.stringValue)' not found"
                 )
             )
         }
@@ -715,19 +894,19 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
     }
 
     func decode(_ type: Int.Type, forKey key: Key) throws -> Int {
-        Int(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: Int8.Type, forKey key: Key) throws -> Int8 {
-        Int8(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: Int16.Type, forKey key: Key) throws -> Int16 {
-        Int16(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: Int32.Type, forKey key: Key) throws -> Int32 {
-        Int32(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: Int64.Type, forKey key: Key) throws -> Int64 {
@@ -738,31 +917,39 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
         return i
     }
 
+    private func decodeInteger<T: FixedWidthInteger>(_ type: T.Type, forKey key: Key) throws -> T {
+        try convertInteger(decode(Int64.self, forKey: key), to: type, codingPath: codingPath + [key])
+    }
+
     func decode(_ type: UInt.Type, forKey key: Key) throws -> UInt {
-        UInt(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: UInt8.Type, forKey key: Key) throws -> UInt8 {
-        UInt8(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: UInt16.Type, forKey key: Key) throws -> UInt16 {
-        UInt16(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: UInt32.Type, forKey key: Key) throws -> UInt32 {
-        UInt32(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: UInt64.Type, forKey key: Key) throws -> UInt64 {
-        UInt64(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T {
         let value = try getValue(forKey: key)
 
         if type == Date.self {
-            return try decodeDate(from: value, forKey: key) as! T
+            return try decodeDate(
+                from: value,
+                strategy: options.dateDecodingStrategy,
+                codingPath: codingPath + [key]
+            ) as! T
         }
         if type == LocalDateTime.self {
             guard case .localDateTime(let dt) = value else {
@@ -786,63 +973,13 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
             return try decodeURL(from: string, codingPath: codingPath + [key]) as! T
         }
 
-        let decoder = _TOMLDecoder(
-            value: value,
+        return try _TOMLDecoder.decode(
+            type,
+            from: value,
             codingPath: codingPath + [key],
             userInfo: userInfo,
             options: options
         )
-        return try T(from: decoder)
-    }
-
-    private func decodeDate(from value: TOMLValue, forKey key: Key) throws -> Date {
-        switch value {
-        case .offsetDateTime(let date):
-            return date
-        case .localDateTime(let dt):
-            var components = DateComponents()
-            components.year = dt.year
-            components.month = dt.month
-            components.day = dt.day
-            components.hour = dt.hour
-            components.minute = dt.minute
-            components.second = dt.second
-            components.nanosecond = dt.nanosecond
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath + [key],
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        case .localDate(let d):
-            var components = DateComponents()
-            components.year = d.year
-            components.month = d.month
-            components.day = d.day
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath + [key],
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        case .float(let f):
-            switch options.dateDecodingStrategy {
-            case .secondsSince1970:
-                return Date(timeIntervalSince1970: f)
-            case .millisecondsSince1970:
-                return Date(timeIntervalSince1970: f / 1000)
-            default:
-                throw typeMismatchError(Date.self, value: value, key: key)
-            }
-        default:
-            throw typeMismatchError(Date.self, value: value, key: key)
-        }
     }
 
     func nestedContainer<NestedKey: CodingKey>(
@@ -855,7 +992,7 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
         }
 
         let container = TOMLKeyedDecodingContainer<NestedKey>(
-            dict: dict,
+            table: dict,
             codingPath: codingPath + [key],
             userInfo: userInfo,
             options: options
@@ -879,7 +1016,7 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
 
     func superDecoder() throws -> any Decoder {
         _TOMLDecoder(
-            value: .table(dict),
+            value: .table(table),
             codingPath: codingPath,
             userInfo: userInfo,
             options: options
@@ -917,21 +1054,31 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
 
     var count: Int? { array.count }
     var isAtEnd: Bool { currentIndex >= array.count }
+
+    /// The index of the next element to decode.
+    ///
+    /// Like `JSONDecoder`, the container moves to the next element
+    /// only after it decodes the current element,
+    /// so a caller can try another type after a decode fails.
     var currentIndex: Int = 0
 
-    private mutating func nextValue() throws -> TOMLValue {
+    /// The coding path of the current element.
+    private var currentCodingPath: [any CodingKey] {
+        codingPath + [TOMLCodingKey(index: currentIndex)]
+    }
+
+    /// Returns the current element without moving to the next element.
+    private func currentValue() throws -> TOMLValue {
         guard !isAtEnd else {
             throw DecodingError.valueNotFound(
                 Any.self,
                 DecodingError.Context(
-                    codingPath: codingPath + [TOMLCodingKey(index: currentIndex)],
+                    codingPath: currentCodingPath,
                     debugDescription: "Unkeyed container is at end"
                 )
             )
         }
-        let value = array[currentIndex]
-        currentIndex += 1
-        return value
+        return array[currentIndex]
     }
 
     mutating func decodeNil() throws -> Bool {
@@ -939,28 +1086,33 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
     }
 
     mutating func decode(_ type: Bool.Type) throws -> Bool {
-        let value = try nextValue()
+        let value = try currentValue()
         guard case .boolean(let b) = value else {
             throw typeMismatchError(type, value: value)
         }
+        currentIndex += 1
         return b
     }
 
     mutating func decode(_ type: String.Type) throws -> String {
-        let value = try nextValue()
+        let value = try currentValue()
         guard case .string(let s) = value else {
             throw typeMismatchError(type, value: value)
         }
+        currentIndex += 1
         return s
     }
 
     mutating func decode(_ type: Double.Type) throws -> Double {
-        let value = try nextValue()
+        let value = try currentValue()
+        let result: Double
         switch value {
-        case .float(let f): return f
-        case .integer(let i): return Double(i)
+        case .float(let f): result = f
+        case .integer(let i): result = Double(i)
         default: throw typeMismatchError(type, value: value)
         }
+        currentIndex += 1
+        return result
     }
 
     mutating func decode(_ type: Float.Type) throws -> Float {
@@ -968,54 +1120,70 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
     }
 
     mutating func decode(_ type: Int.Type) throws -> Int {
-        Int(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: Int8.Type) throws -> Int8 {
-        Int8(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: Int16.Type) throws -> Int16 {
-        Int16(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: Int32.Type) throws -> Int32 {
-        Int32(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: Int64.Type) throws -> Int64 {
-        let value = try nextValue()
+        try decodeInteger(type)
+    }
+
+    private mutating func decodeInteger<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
+        let value = try currentValue()
         guard case .integer(let i) = value else {
-            throw typeMismatchError(type, value: value)
+            throw typeMismatchError(Int64.self, value: value)
         }
-        return i
+        let result = try convertInteger(i, to: type, codingPath: currentCodingPath)
+        currentIndex += 1
+        return result
     }
 
     mutating func decode(_ type: UInt.Type) throws -> UInt {
-        UInt(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: UInt8.Type) throws -> UInt8 {
-        UInt8(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: UInt16.Type) throws -> UInt16 {
-        UInt16(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: UInt32.Type) throws -> UInt32 {
-        UInt32(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: UInt64.Type) throws -> UInt64 {
-        UInt64(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode<T: Decodable>(_ type: T.Type) throws -> T {
-        let value = try nextValue()
+        let result = try decodeCurrentValue(type)
+        currentIndex += 1
+        return result
+    }
+
+    private func decodeCurrentValue<T: Decodable>(_ type: T.Type) throws -> T {
+        let value = try currentValue()
 
         if type == Date.self {
-            return try decodeDate(from: value) as! T
+            return try decodeDate(
+                from: value,
+                strategy: options.dateDecodingStrategy,
+                codingPath: currentCodingPath
+            ) as! T
         }
         if type == LocalDateTime.self {
             guard case .localDateTime(let dt) = value else {
@@ -1036,108 +1204,68 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
             return t as! T
         }
         if type == URL.self, case .string(let string) = value {
-            return try decodeURL(
-                from: string,
-                codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)]
-            ) as! T
+            return try decodeURL(from: string, codingPath: currentCodingPath) as! T
         }
 
-        let decoder = _TOMLDecoder(
-            value: value,
-            codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+        return try _TOMLDecoder.decode(
+            type,
+            from: value,
+            codingPath: currentCodingPath,
             userInfo: userInfo,
             options: options
         )
-        return try T(from: decoder)
-    }
-
-    private func decodeDate(from value: TOMLValue) throws -> Date {
-        switch value {
-        case .offsetDateTime(let date):
-            return date
-        case .localDateTime(let dt):
-            var components = DateComponents()
-            components.year = dt.year
-            components.month = dt.month
-            components.day = dt.day
-            components.hour = dt.hour
-            components.minute = dt.minute
-            components.second = dt.second
-            components.nanosecond = dt.nanosecond
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        case .localDate(let d):
-            var components = DateComponents()
-            components.year = d.year
-            components.month = d.month
-            components.day = d.day
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        default:
-            throw typeMismatchError(Date.self, value: value)
-        }
     }
 
     mutating func nestedContainer<NestedKey: CodingKey>(
         keyedBy type: NestedKey.Type
     ) throws -> KeyedDecodingContainer<NestedKey> {
-        let value = try nextValue()
+        let value = try currentValue()
         guard case .table(let dict) = value else {
             throw typeMismatchError([String: Any].self, value: value)
         }
 
         let container = TOMLKeyedDecodingContainer<NestedKey>(
-            dict: dict,
-            codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+            table: dict,
+            codingPath: currentCodingPath,
             userInfo: userInfo,
             options: options
         )
+        currentIndex += 1
         return KeyedDecodingContainer(container)
     }
 
     mutating func nestedUnkeyedContainer() throws -> any UnkeyedDecodingContainer {
-        let value = try nextValue()
+        let value = try currentValue()
         guard case .array(let arr) = value else {
             throw typeMismatchError([Any].self, value: value)
         }
 
-        return TOMLUnkeyedDecodingContainer(
+        let container = TOMLUnkeyedDecodingContainer(
             array: arr,
-            codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+            codingPath: currentCodingPath,
             userInfo: userInfo,
             options: options
         )
+        currentIndex += 1
+        return container
     }
 
     mutating func superDecoder() throws -> any Decoder {
-        let value = try nextValue()
-        return _TOMLDecoder(
-            value: value,
-            codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+        let decoder = _TOMLDecoder(
+            value: try currentValue(),
+            codingPath: currentCodingPath,
             userInfo: userInfo,
             options: options
         )
+        currentIndex += 1
+        return decoder
     }
 
     private func typeMismatchError<T>(_ type: T.Type, value: TOMLValue) -> DecodingError {
         DecodingError.typeMismatch(
             type,
             DecodingError.Context(
-                codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+                codingPath: currentCodingPath,
                 debugDescription: "Expected \(type), found \(valueTypeName(value))"
             )
         )
@@ -1183,19 +1311,19 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
     }
 
     func decode(_ type: Int.Type) throws -> Int {
-        Int(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: Int8.Type) throws -> Int8 {
-        Int8(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: Int16.Type) throws -> Int16 {
-        Int16(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: Int32.Type) throws -> Int32 {
-        Int32(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: Int64.Type) throws -> Int64 {
@@ -1205,29 +1333,33 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
         return i
     }
 
+    private func decodeInteger<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
+        try convertInteger(decode(Int64.self), to: type, codingPath: codingPath)
+    }
+
     func decode(_ type: UInt.Type) throws -> UInt {
-        UInt(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: UInt8.Type) throws -> UInt8 {
-        UInt8(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: UInt16.Type) throws -> UInt16 {
-        UInt16(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: UInt32.Type) throws -> UInt32 {
-        UInt32(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: UInt64.Type) throws -> UInt64 {
-        UInt64(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode<T: Decodable>(_ type: T.Type) throws -> T {
         if type == Date.self {
-            return try decodeDate() as! T
+            return try decodeDate(from: value, strategy: options.dateDecodingStrategy, codingPath: codingPath) as! T
         }
         if type == LocalDateTime.self {
             guard case .localDateTime(let dt) = value else {
@@ -1251,54 +1383,13 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
             return try decodeURL(from: string, codingPath: codingPath) as! T
         }
 
-        let decoder = _TOMLDecoder(
-            value: value,
+        return try _TOMLDecoder.decode(
+            type,
+            from: value,
             codingPath: codingPath,
             userInfo: userInfo,
             options: options
         )
-        return try T(from: decoder)
-    }
-
-    private func decodeDate() throws -> Date {
-        switch value {
-        case .offsetDateTime(let date):
-            return date
-        case .localDateTime(let dt):
-            var components = DateComponents()
-            components.year = dt.year
-            components.month = dt.month
-            components.day = dt.day
-            components.hour = dt.hour
-            components.minute = dt.minute
-            components.second = dt.second
-            components.nanosecond = dt.nanosecond
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath,
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        case .localDate(let d):
-            var components = DateComponents()
-            components.year = d.year
-            components.month = d.month
-            components.day = d.day
-            guard let date = Calendar(identifier: .gregorian).date(from: components) else {
-                throw DecodingError.dataCorrupted(
-                    DecodingError.Context(
-                        codingPath: codingPath,
-                        debugDescription: "Invalid date components"
-                    )
-                )
-            }
-            return date
-        default:
-            throw typeMismatchError(Date.self)
-        }
     }
 
     private func typeMismatchError<T>(_ type: T.Type) -> DecodingError {
@@ -1315,19 +1406,28 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
 // MARK: - String Extensions
 
 private extension String {
+    /// Converts a snake_case key to camelCase, as `JSONDecoder` does.
+    ///
+    /// The conversion lowercases the first word, capitalizes the other words,
+    /// and removes the underscores between them.
+    /// It keeps leading and trailing underscores,
+    /// and leaves a key without an underscore between words unchanged.
+    /// For example, `first_name` becomes `firstName`,
+    /// `_first_name_` becomes `_firstName_`, and `MY_VAR` becomes `myVar`.
     func convertFromSnakeCase() -> String {
-        var result = ""
-        var capitalizeNext = false
-        for char in self {
-            if char == "_" {
-                capitalizeNext = true
-            } else if capitalizeNext {
-                result += char.uppercased()
-                capitalizeNext = false
-            } else {
-                result.append(char)
-            }
+        guard let first = firstIndex(where: { $0 != "_" }) else {
+            return self
         }
-        return result
+        var last = index(before: endIndex)
+        while last > first && self[last] == "_" {
+            formIndex(before: &last)
+        }
+
+        let words = self[first ... last].split(separator: "_")
+        guard words.count > 1 else {
+            return self
+        }
+        let camelCase = ([words[0].lowercased()] + words.dropFirst().map(\.capitalized)).joined()
+        return String(self[..<first]) + camelCase + String(self[index(after: last)...])
     }
 }

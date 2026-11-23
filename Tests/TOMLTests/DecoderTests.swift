@@ -487,6 +487,41 @@ struct TOMLDecoderTests {
         #expect(config.timestamp.timeIntervalSince1970 > 0)
     }
 
+    /// Offsets and their values in seconds:
+    /// offsets above 18 hours, which `TimeZone(secondsFromGMT:)` rejects,
+    /// and offsets that it accepts.
+    static let offsets: [(String, Int)] = [
+        ("+19:00", 68_400),
+        ("+23:59", 86_340),
+        ("-23:59", -86_340),
+        ("+18:00", 64_800),
+        ("-18:00", -64_800),
+        ("+05:30", 19_800),
+        ("Z", 0),
+    ]
+
+    @Test(arguments: offsets)
+    func decodeOffsetDateTimeInstant(offset: String, offsetSeconds: Int) throws {
+        struct Config: Codable {
+            let timestamp: Date
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: "timestamp = 2024-01-15T09:30:00\(offset)")
+
+        // 2024-01-15T09:30:00Z is 1705311000 seconds after the epoch.
+        let expected = 1_705_311_000 - TimeInterval(offsetSeconds)
+        #expect(config.timestamp.timeIntervalSince1970 == expected)
+    }
+
+    @Test func decodeOffsetDateTimeAboveEighteenHours() throws {
+        struct Config: Codable {
+            let timestamp: Date
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: "timestamp = 2024-01-15T09:30:00+19:00")
+        #expect(config.timestamp.timeIntervalSince1970 == 1_705_242_600)
+    }
+
     @Test func decodeLocalDateTime() throws {
         let toml = """
             datetime = 2024-06-15T10:30:00
@@ -644,9 +679,9 @@ struct TOMLDecoderTests {
 
     @Test func decodeConvertFromSnakeCase() throws {
         let toml = """
-            userName = "john"
-            userEmail = "john@example.com"
-            createdAt = 123
+            user_name = "john"
+            user_email = "john@example.com"
+            created_at = 123
             """
 
         struct Config: Codable {
@@ -662,6 +697,160 @@ struct TOMLDecoderTests {
         #expect(config.userName == "john")
         #expect(config.userEmail == "john@example.com")
         #expect(config.createdAt == 123)
+    }
+
+    @Test func decodeConvertFromSnakeCaseREADMEExample() throws {
+        struct User: Codable {
+            var firstName: String  // Maps from first_name
+            var lastName: String  // Maps from last_name
+        }
+
+        let toml = """
+            first_name = "Ada"
+            last_name = "Lovelace"
+            """
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let user = try decoder.decode(User.self, from: toml)
+
+        #expect(user.firstName == "Ada")
+        #expect(user.lastName == "Lovelace")
+    }
+
+    @Test func decodeConvertFromSnakeCaseKeepsCamelCaseKeys() throws {
+        let toml = """
+            userName = "john"
+            [homeAddress]
+            postal_code = "12345"
+            """
+
+        struct Address: Codable {
+            let postalCode: String
+        }
+
+        struct Config: Codable {
+            let userName: String
+            let homeAddress: Address
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let config = try decoder.decode(Config.self, from: toml)
+
+        #expect(config.userName == "john")
+        #expect(config.homeAddress.postalCode == "12345")
+    }
+
+    @Test func decodeConvertFromSnakeCaseUnderscores() throws {
+        struct AnyKey: CodingKey {
+            var stringValue: String
+            var intValue: Int? { nil }
+            init(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+
+        struct Keys: Decodable {
+            let keys: [String]
+            init(from decoder: any Decoder) throws {
+                keys = try decoder.container(keyedBy: AnyKey.self).allKeys.map(\.stringValue).sorted()
+            }
+        }
+
+        let toml = """
+            _leading_underscore = 1
+            trailing_underscore_ = 2
+            __both__sides__ = 3
+            MY_VAR = 4
+            URL_value = 5
+            a__b = 6
+            _ = 7
+            __ = 8
+            """
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let keys = try decoder.decode(Keys.self, from: toml).keys
+
+        // These are the keys that `JSONDecoder` produces for the same input.
+        #expect(
+            keys == [
+                "_", "__", "__bothSides__", "_leadingUnderscore", "aB", "myVar", "trailingUnderscore_", "urlValue",
+            ]
+        )
+    }
+
+    @Test func decodeConvertFromSnakeCaseContains() throws {
+        struct Config: Decodable {
+            let hasFirstName: Bool
+            let hasSnakeCaseKey: Bool
+
+            enum CodingKeys: String, CodingKey {
+                case firstName
+                case snakeCaseKey = "first_name"
+            }
+
+            init(from decoder: any Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                hasFirstName = container.contains(.firstName)
+                hasSnakeCaseKey = container.contains(.snakeCaseKey)
+            }
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let config = try decoder.decode(Config.self, from: #"first_name = "Ada""#)
+
+        #expect(config.hasFirstName)
+        #expect(!config.hasSnakeCaseKey)
+    }
+
+    @Test func decodeConvertFromSnakeCaseMissingKey() throws {
+        struct User: Codable {
+            var firstName: String
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        do {
+            _ = try decoder.decode(User.self, from: #"last_name = "Lovelace""#)
+            Issue.record("Expected a decoding error")
+        } catch DecodingError.keyNotFound(let key, let context) {
+            #expect(key.stringValue == "firstName")
+            #expect(context.codingPath.isEmpty)
+        }
+    }
+
+    @Test func decodeConvertFromSnakeCaseDictionary() throws {
+        struct Service: Codable {
+            let displayName: String
+        }
+
+        struct Config: Codable {
+            let environment: [String: String]
+            let services: [String: Service]
+        }
+
+        let toml = """
+            [environment]
+            MY_VAR = "1"
+            other_var = "2"
+
+            [services.web_server]
+            display_name = "Web"
+            """
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let config = try decoder.decode(Config.self, from: toml)
+
+        // Like `JSONDecoder`, the strategy doesn't convert dictionary keys,
+        // but it converts the keys of the values in the dictionary.
+        #expect(config.environment == ["MY_VAR": "1", "other_var": "2"])
+        #expect(config.services["web_server"]?.displayName == "Web")
+
+        let topLevel = try decoder.decode([String: String].self, from: #"MY_VAR = "1""#)
+        #expect(topLevel == ["MY_VAR": "1"])
     }
 
     @Test func decodeUseDefaultKeys() throws {
@@ -1404,6 +1593,116 @@ struct TOMLDecoderTests {
         #expect(config.items.count == 2)
     }
 
+    @Test func unkeyedContainerRetriesAfterFailedDecode() throws {
+        /// Reads each element as an `Int` or, failing that, as a `String`.
+        struct Mixed: Decodable {
+            var elements: [String] = []
+
+            init(from decoder: any Decoder) throws {
+                var container = try decoder.unkeyedContainer()
+                while !container.isAtEnd {
+                    if let int = try? container.decode(Int.self) {
+                        elements.append("\(int)")
+                    } else if let string = try? container.decode(String.self) {
+                        elements.append(string)
+                    } else {
+                        Issue.record("Element \(container.currentIndex) is neither an Int nor a String")
+                        return
+                    }
+                }
+            }
+        }
+
+        struct Config: Decodable {
+            let a: Mixed
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: #"a = [1, "x", 2, "y"]"#)
+        #expect(config.a.elements == ["1", "x", "2", "y"])
+    }
+
+    @Test func unkeyedContainerKeepsIndexAfterFailedDecode() throws {
+        /// Records the index and coding path after each failed decode.
+        struct Probe: Decodable {
+            var indexes: [Int] = []
+            var errorPaths: [[String]] = []
+            var values: [String] = []
+
+            init(from decoder: any Decoder) throws {
+                var container = try decoder.unkeyedContainer()
+                let attempts: [(inout any UnkeyedDecodingContainer) throws -> Void] = [
+                    { _ = try $0.decode(Int.self) },
+                    { _ = try $0.decode(Int8.self) },
+                    { _ = try $0.decode(Bool.self) },
+                    { _ = try $0.decode(Double.self) },
+                    { _ = try $0.decode(Date.self) },
+                    { _ = try $0.decode(LocalDate.self) },
+                    { _ = try $0.decode([String: Int].self) },
+                    { _ = try $0.nestedContainer(keyedBy: AnyKey.self) },
+                    { _ = try $0.nestedUnkeyedContainer() },
+                ]
+                _ = try container.decode(String.self)
+                for attempt in attempts {
+                    do {
+                        try attempt(&container)
+                        Issue.record("Expected a decoding error")
+                    } catch DecodingError.typeMismatch(_, let context) {
+                        errorPaths.append(context.codingPath.map(\.stringValue))
+                    }
+                    indexes.append(container.currentIndex)
+                }
+                values.append(try container.decode(String.self))
+                indexes.append(container.currentIndex)
+
+                // An integer that doesn't fit stays current, too.
+                do {
+                    _ = try container.decode(UInt8.self)
+                    Issue.record("Expected a decoding error")
+                } catch DecodingError.dataCorrupted(let context) {
+                    errorPaths.append(context.codingPath.map(\.stringValue))
+                }
+                indexes.append(container.currentIndex)
+                values.append("\(try container.decode(Int.self))")
+                indexes.append(container.currentIndex)
+
+                // `superDecoder()` moves to the next element.
+                values.append(try container.superDecoder().singleValueContainer().decode(String.self))
+                indexes.append(container.currentIndex)
+            }
+        }
+
+        struct AnyKey: CodingKey {
+            var stringValue: String
+            var intValue: Int? { nil }
+            init(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+
+        struct Config: Decodable {
+            let a: Probe
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: #"a = ["first", "second", 300, "last"]"#)
+
+        #expect(config.a.values == ["second", "300", "last"])
+        #expect(config.a.indexes == Array(repeating: 1, count: 9) + [2, 2, 3, 4])
+        #expect(config.a.errorPaths == Array(repeating: ["a", "Index 1"], count: 9) + [["a", "Index 2"]])
+    }
+
+    @Test func unkeyedContainerErrorPathNamesFailedElement() throws {
+        struct Config: Decodable {
+            let a: [Int]
+        }
+
+        do {
+            _ = try TOMLDecoder().decode(Config.self, from: #"a = [1, 2, "three"]"#)
+            Issue.record("Expected a decoding error")
+        } catch DecodingError.typeMismatch(_, let context) {
+            #expect(context.codingPath.map(\.stringValue) == ["a", "Index 2"])
+            #expect(context.codingPath.last?.intValue == 2)
+        }
+    }
+
     // MARK: - Nested Container Decoding
 
     @Test func decodeNestedKeyedContainers() throws {
@@ -1550,6 +1849,98 @@ struct TOMLDecoderTests {
 
         #expect(throws: DecodingError.self) {
             try decoder.decode(Config.self, from: toml)
+        }
+    }
+
+    // MARK: - Numeric Date Decoding
+
+    /// A TOML number and the seconds since 1970 that it represents under a strategy.
+    struct NumericDate: Sendable, CustomTestStringConvertible {
+        let strategy: TOMLDecoder.DateDecodingStrategy
+        let toml: String
+        let seconds: TimeInterval
+
+        var testDescription: String {
+            "\(toml) with \(strategy)"
+        }
+    }
+
+    static let numericDates: [NumericDate] = [
+        NumericDate(strategy: .secondsSince1970, toml: "1700000000", seconds: 1_700_000_000),
+        NumericDate(strategy: .secondsSince1970, toml: "1700000000.5", seconds: 1_700_000_000.5),
+        NumericDate(strategy: .millisecondsSince1970, toml: "1700000000500", seconds: 1_700_000_000.5),
+        NumericDate(strategy: .millisecondsSince1970, toml: "1700000000250.0", seconds: 1_700_000_000.25),
+    ]
+
+    /// Decodes a date with a single-value container.
+    struct Timestamp: Decodable {
+        let date: Date
+
+        init(from decoder: any Decoder) throws {
+            date = try decoder.singleValueContainer().decode(Date.self)
+        }
+    }
+
+    @Test(arguments: numericDates)
+    func keyedContainerDecodeDateFromNumber(_ numeric: NumericDate) throws {
+        struct Config: Decodable {
+            let t: Date
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = numeric.strategy
+        let config = try decoder.decode(Config.self, from: "t = \(numeric.toml)")
+        #expect(config.t.timeIntervalSince1970 == numeric.seconds)
+    }
+
+    @Test(arguments: numericDates)
+    func unkeyedContainerDecodeDateFromNumber(_ numeric: NumericDate) throws {
+        struct Config: Decodable {
+            let t: [Date]
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = numeric.strategy
+        let config = try decoder.decode(Config.self, from: "t = [\(numeric.toml), \(numeric.toml)]")
+        #expect(config.t.map(\.timeIntervalSince1970) == [numeric.seconds, numeric.seconds])
+    }
+
+    @Test(arguments: numericDates)
+    func singleValueContainerDecodeDateFromNumber(_ numeric: NumericDate) throws {
+        struct Config: Decodable {
+            let t: Timestamp
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = numeric.strategy
+        let config = try decoder.decode(Config.self, from: "t = \(numeric.toml)")
+        #expect(config.t.date.timeIntervalSince1970 == numeric.seconds)
+    }
+
+    @Test(arguments: ["1700000000", "1700000000.0", #""2024-01-15T09:30:00Z""#])
+    func iso8601DecodeDateFromNonDateThrows(toml: String) throws {
+        struct Config: Decodable {
+            let t: Date
+            let ts: [Date]
+            let single: Timestamp
+        }
+
+        let decoder = TOMLDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let documents = [
+            ("t = \(toml)", ["t"]),
+            ("t = 2024-01-15T09:30:00Z\nts = [\(toml)]", ["ts", "Index 0"]),
+            ("t = 2024-01-15T09:30:00Z\nts = []\nsingle = \(toml)", ["single"]),
+        ]
+        for (document, codingPath) in documents {
+            do {
+                _ = try decoder.decode(Config.self, from: document)
+                Issue.record("Expected a decoding error for \(document)")
+            } catch DecodingError.typeMismatch(let type, let context) {
+                #expect(type is Date.Type)
+                #expect(context.codingPath.map(\.stringValue) == codingPath)
+            }
         }
     }
 

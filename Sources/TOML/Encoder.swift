@@ -212,12 +212,20 @@ public final class TOMLEncoder {
             throw TOMLEncodingError.invalidValue("No value encoded", codingPath: [])
         }
 
-        return serialize(value, sortKeys: outputFormatting.contains(.sortedKeys))
+        return try serialize(value, sortKeys: outputFormatting.contains(.sortedKeys))
     }
 
     // MARK: - Private Serialization
 
-    private func serialize(_ value: TOMLValue, sortKeys: Bool) -> String {
+    private func serialize(_ value: TOMLValue, sortKeys: Bool) throws -> String {
+        // A TOML document is a table, so it can't hold another value at the top level.
+        guard value.isTable else {
+            throw TOMLEncodingError.invalidValue(
+                "Top-level value must encode as a table, not \(value.typeName)",
+                codingPath: []
+            )
+        }
+
         var result = ""
         serializeTable(value, to: &result, path: [], sortKeys: sortKeys)
         return result
@@ -461,29 +469,15 @@ final class _TOMLEncoder: Encoder {
 // MARK: - Boxing Helpers
 
 private extension _TOMLEncoder {
-    func box(_ value: Bool) -> TOMLValue { .boolean(value) }
-    func box(_ value: Int) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Int8) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Int16) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Int32) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Int64) -> TOMLValue { .integer(value) }
-    func box(_ value: UInt) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: UInt8) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: UInt16) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: UInt32) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: UInt64) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Float) -> TOMLValue { .float(Double(value)) }
-    func box(_ value: Double) -> TOMLValue { .float(value) }
-    func box(_ value: String) -> TOMLValue { .string(value) }
-
     func box(_ date: Date) -> TOMLValue {
         switch options.dateEncodingStrategy {
         case .iso8601:
             return .offsetDateTime(date)
         case .localDateTime:
-            let components = Calendar.current.dateComponents(
+            let components = gregorianComponents(
                 [.year, .month, .day, .hour, .minute, .second, .nanosecond],
-                from: date
+                of: date,
+                inTimeZoneOf: .current
             )
             return .localDateTime(
                 LocalDateTime(
@@ -497,7 +491,7 @@ private extension _TOMLEncoder {
                 )
             )
         case .localDate:
-            let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+            let components = gregorianComponents([.year, .month, .day], of: date, inTimeZoneOf: .current)
             return .localDate(
                 LocalDate(
                     year: components.year ?? 0,
@@ -506,9 +500,10 @@ private extension _TOMLEncoder {
                 )
             )
         case .localTime:
-            let components = Calendar.current.dateComponents(
+            let components = gregorianComponents(
                 [.hour, .minute, .second, .nanosecond],
-                from: date
+                of: date,
+                inTimeZoneOf: .current
             )
             return .localTime(
                 LocalTime(
@@ -560,6 +555,40 @@ private extension _TOMLEncoder {
             return key.stringValue.convertToSnakeCase()
         }
     }
+}
+
+// MARK: - Local Date Components
+
+/// Returns the components of a date in the Gregorian calendar,
+/// in the time zone of the given calendar.
+///
+/// TOML dates use the Gregorian calendar, as ``TOMLDecoder`` does,
+/// so this ignores the calendar system of `calendar`,
+/// such as the Buddhist or Japanese calendar, and uses only its time zone.
+func gregorianComponents(
+    _ components: Set<Calendar.Component>,
+    of date: Date,
+    inTimeZoneOf calendar: Calendar
+) -> DateComponents {
+    var gregorian = Calendar(identifier: .gregorian)
+    gregorian.timeZone = calendar.timeZone
+    return gregorian.dateComponents(components, from: date)
+}
+
+// MARK: - Integer Encoding
+
+/// Converts an unsigned integer to a TOML integer.
+///
+/// TOML integers are 64-bit signed integers,
+/// so this throws for a value greater than `Int64.max`.
+private func encodeInteger<T: UnsignedInteger>(_ value: T, codingPath: [any CodingKey]) throws -> TOMLValue {
+    guard let integer = Int64(exactly: value) else {
+        throw TOMLEncodingError.invalidValue(
+            "\(value) is greater than the maximum TOML integer, \(Int64.max)",
+            codingPath: codingPath
+        )
+    }
+    return .integer(integer)
 }
 
 // MARK: - Encoding Storage
@@ -629,7 +658,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     }
 
     mutating func encode(_ value: UInt, forKey key: Key) throws {
-        set(.integer(Int64(value)), forKey: key)
+        set(try encodeInteger(value, codingPath: codingPath + [key]), forKey: key)
     }
 
     mutating func encode(_ value: UInt8, forKey key: Key) throws {
@@ -645,7 +674,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     }
 
     mutating func encode(_ value: UInt64, forKey key: Key) throws {
-        set(.integer(Int64(value)), forKey: key)
+        set(try encodeInteger(value, codingPath: codingPath + [key]), forKey: key)
     }
 
     mutating func encode<T: Encodable>(_ value: T, forKey key: Key) throws {
@@ -745,7 +774,7 @@ private struct TOMLUnkeyedEncodingContainer: UnkeyedEncodingContainer {
     }
 
     mutating func encode(_ value: UInt) throws {
-        append(.integer(Int64(value)))
+        append(try encodeInteger(value, codingPath: codingPath + [TOMLCodingKey(index: count)]))
     }
 
     mutating func encode(_ value: UInt8) throws {
@@ -761,7 +790,7 @@ private struct TOMLUnkeyedEncodingContainer: UnkeyedEncodingContainer {
     }
 
     mutating func encode(_ value: UInt64) throws {
-        append(.integer(Int64(value)))
+        append(try encodeInteger(value, codingPath: codingPath + [TOMLCodingKey(index: count)]))
     }
 
     mutating func encode<T: Encodable>(_ value: T) throws {
@@ -849,7 +878,7 @@ private struct TOMLSingleValueEncodingContainer: SingleValueEncodingContainer {
     }
 
     mutating func encode(_ value: UInt) throws {
-        encoder.setValue(.integer(Int64(value)))
+        encoder.setValue(try encodeInteger(value, codingPath: codingPath))
     }
 
     mutating func encode(_ value: UInt8) throws {
@@ -865,7 +894,7 @@ private struct TOMLSingleValueEncodingContainer: SingleValueEncodingContainer {
     }
 
     mutating func encode(_ value: UInt64) throws {
-        encoder.setValue(.integer(Int64(value)))
+        encoder.setValue(try encodeInteger(value, codingPath: codingPath))
     }
 
     mutating func encode<T: Encodable>(_ value: T) throws {
@@ -897,5 +926,20 @@ private extension TOMLValue {
     var isTable: Bool {
         if case .table = self { return true }
         return false
+    }
+
+    var typeName: String {
+        switch self {
+        case .string: return "a string"
+        case .integer: return "an integer"
+        case .float: return "a float"
+        case .boolean: return "a boolean"
+        case .offsetDateTime: return "an offset date-time"
+        case .localDateTime: return "a local date-time"
+        case .localDate: return "a local date"
+        case .localTime: return "a local time"
+        case .array: return "an array"
+        case .table: return "a table"
+        }
     }
 }
