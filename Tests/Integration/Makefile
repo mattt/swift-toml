@@ -1,5 +1,6 @@
 .PHONY: all build test test-decoder test-encoder clean
 
+SWIFT ?= swift
 GO ?= go
 # toml-test v2.2.0 does not have the invalid/encoding/bom-not-at-start-02 and -03 cases,
 # so this pins the commit on main that adds them (it requires Go 1.27 or later).
@@ -18,11 +19,11 @@ SKIP_1.0.0 := invalid/datetime/no-secs,invalid/local-datetime/no-secs,invalid/lo
 
 all: test
 
-# `build` is phony, so it always runs `swift build`
+# `build` is phony, so it always runs `$(SWIFT) build`
 # and SwiftPM decides what to rebuild.
 # File timestamps in this Makefile cannot see edits to the library in `../..`.
 build:
-	swift build
+	$(SWIFT) build
 
 test: test-decoder test-encoder
 
@@ -43,4 +44,4 @@ test-encoder-%: build
 	$(TOML_TEST) test -toml=$* -decoder=$(DECODER) -encoder=$(ENCODER) -run='encoder/*,encoder/*/*'
 
 clean:
-	swift package clean
+	$(SWIFT) package clean
