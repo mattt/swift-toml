@@ -212,12 +212,20 @@ public final class TOMLEncoder {
             throw TOMLEncodingError.invalidValue("No value encoded", codingPath: [])
         }
 
-        return serialize(value, sortKeys: outputFormatting.contains(.sortedKeys))
+        return try serialize(value, sortKeys: outputFormatting.contains(.sortedKeys))
     }
 
     // MARK: - Private Serialization
 
-    private func serialize(_ value: TOMLValue, sortKeys: Bool) -> String {
+    private func serialize(_ value: TOMLValue, sortKeys: Bool) throws -> String {
+        // A TOML document is a table, so it can't hold another value at the top level.
+        guard value.isTable else {
+            throw TOMLEncodingError.invalidValue(
+                "Top-level value must encode as a table, not \(value.typeName)",
+                codingPath: []
+            )
+        }
+
         var result = ""
         serializeTable(value, to: &result, path: [], sortKeys: sortKeys)
         return result
@@ -898,5 +906,20 @@ private extension TOMLValue {
     var isTable: Bool {
         if case .table = self { return true }
         return false
+    }
+
+    var typeName: String {
+        switch self {
+        case .string: return "a string"
+        case .integer: return "an integer"
+        case .float: return "a float"
+        case .boolean: return "a boolean"
+        case .offsetDateTime: return "an offset date-time"
+        case .localDateTime: return "a local date-time"
+        case .localDate: return "a local date"
+        case .localTime: return "a local time"
+        case .array: return "an array"
+        case .table: return "a table"
+        }
     }
 }

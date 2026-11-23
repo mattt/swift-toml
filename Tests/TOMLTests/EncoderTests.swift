@@ -513,6 +513,46 @@ struct EncoderTests {
         #expect(String(data: data, encoding: .utf8)?.contains("name = \"test\"") == true)
     }
 
+    // MARK: - Top-Level Values
+
+    /// Checks that encoding `value` throws because it isn't a table.
+    private func expectTopLevelError<T: Encodable>(_ value: T, found: String) {
+        let encoder = TOMLEncoder()
+        let encodings: [() throws -> Void] = [
+            { _ = try encoder.encode(value) },
+            { _ = try encoder.encodeToString(value) },
+        ]
+        for encode in encodings {
+            do {
+                try encode()
+                Issue.record("Expected an encoding error for \(value)")
+            } catch TOMLEncodingError.invalidValue(let message, let codingPath) {
+                #expect(message == "Top-level value must encode as a table, not \(found)")
+                #expect(codingPath.isEmpty)
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    @Test func encodeTopLevelArrayThrows() {
+        expectTopLevelError([1, 2, 3], found: "an array")
+    }
+
+    @Test func encodeTopLevelIntegerThrows() {
+        expectTopLevelError(42, found: "an integer")
+    }
+
+    @Test func encodeTopLevelStringThrows() {
+        expectTopLevelError("hi", found: "a string")
+    }
+
+    @Test func encodeTopLevelEmptyTable() throws {
+        struct Empty: Encodable {}
+        #expect(try TOMLEncoder().encodeToString(Empty()) == "")
+        #expect(try TOMLEncoder().encodeToString([String: Int]()) == "")
+    }
+
     // MARK: - User Info
 
     @Test func encoderUserInfo() throws {
