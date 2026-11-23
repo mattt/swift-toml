@@ -30,8 +30,17 @@ jobs:
           LATEST_VERSION: ${{ steps.check.outputs.latest }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Check if an issue already exists for this version
-          EXISTING=$(gh issue list --label dependencies --state open --search "toml++ $LATEST_VERSION" --json number --jq 'length')
+          # Create the label when the repository does not have it, such as in a fork.
+          # Do not use `--force`, which would change an existing label's color and description.
+          # Label names are case-insensitive on GitHub.
+          if ! gh label list --search dependencies --limit 100 --json name --jq '.[].name' | grep -Fixq dependencies; then
+            gh label create dependencies --color 0366d6 --description "Updates to dependencies"
+          fi
+
+          # Check if an issue already exists for this version.
+          # Include closed issues, so that closing an issue without the update
+          # does not make the next run open another one.
+          EXISTING=$(gh issue list --label dependencies --state all --search "toml++ $LATEST_VERSION" --json number --jq 'length')
 
           if [ "$EXISTING" = "0" ]; then
             gh issue create \
