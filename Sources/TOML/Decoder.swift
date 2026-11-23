@@ -98,11 +98,12 @@ public final class TOMLDecoder {
         public var maxInputSize: Int
 
         /// Maximum nesting depth for tables and arrays.
+        /// The root table has depth 0.
         ///
-        /// - Note: The parser also rejects documents that nest more than
-        ///   about 128 levels deep, whatever the value of this property.
-        ///   For example, 128 levels of nested arrays parse, but 129 levels do not.
-        ///   Inline tables, table headers, and dotted keys count toward the same ceiling.
+        /// - Note: The parser rejects documents nested more than about 128 levels deep
+        ///   before this limit applies, so they throw
+        ///   ``TOMLDecodingError/invalidSyntax(line:column:message:)``
+        ///   whatever the value of this property.
         public var maxDepth: Int
 
         /// Maximum number of keys in a single table.

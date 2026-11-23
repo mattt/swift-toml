@@ -229,8 +229,10 @@ For trusted input where you need no restrictions:
 decoder.limits = .unlimited
 ```
 
-The parser rejects documents nested more than about 128 levels deep,
+The parser rejects documents nested more than about 128 levels deep
+before these limits apply, so such documents throw `TOMLDecodingError.invalidSyntax`
 whatever the limits are.
+With the default limits, version 2.1.1 and earlier threw `invalidData` for most of these documents.
 
 ## Development
 
