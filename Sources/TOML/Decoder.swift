@@ -642,6 +642,26 @@ private func decodeURL(from string: String, codingPath: [any CodingKey]) throws 
     return url
 }
 
+/// Converts a TOML integer to the requested integer type.
+///
+/// Like `JSONDecoder`, this throws instead of trapping
+/// when the value doesn't fit in the type.
+private func convertInteger<T: FixedWidthInteger>(
+    _ value: Int64,
+    to type: T.Type,
+    codingPath: [any CodingKey]
+) throws -> T {
+    guard let result = T(exactly: value) else {
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: codingPath,
+                debugDescription: "Number \(value) is not representable as \(type)"
+            )
+        )
+    }
+    return result
+}
+
 // MARK: - Keyed Decoding Container
 
 private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContainerProtocol {
@@ -715,19 +735,19 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
     }
 
     func decode(_ type: Int.Type, forKey key: Key) throws -> Int {
-        Int(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: Int8.Type, forKey key: Key) throws -> Int8 {
-        Int8(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: Int16.Type, forKey key: Key) throws -> Int16 {
-        Int16(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: Int32.Type, forKey key: Key) throws -> Int32 {
-        Int32(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: Int64.Type, forKey key: Key) throws -> Int64 {
@@ -738,24 +758,28 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
         return i
     }
 
+    private func decodeInteger<T: FixedWidthInteger>(_ type: T.Type, forKey key: Key) throws -> T {
+        try convertInteger(decode(Int64.self, forKey: key), to: type, codingPath: codingPath + [key])
+    }
+
     func decode(_ type: UInt.Type, forKey key: Key) throws -> UInt {
-        UInt(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: UInt8.Type, forKey key: Key) throws -> UInt8 {
-        UInt8(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: UInt16.Type, forKey key: Key) throws -> UInt16 {
-        UInt16(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: UInt32.Type, forKey key: Key) throws -> UInt32 {
-        UInt32(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode(_ type: UInt64.Type, forKey key: Key) throws -> UInt64 {
-        UInt64(try decode(Int64.self, forKey: key))
+        try decodeInteger(type, forKey: key)
     }
 
     func decode<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T {
@@ -968,19 +992,19 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
     }
 
     mutating func decode(_ type: Int.Type) throws -> Int {
-        Int(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: Int8.Type) throws -> Int8 {
-        Int8(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: Int16.Type) throws -> Int16 {
-        Int16(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: Int32.Type) throws -> Int32 {
-        Int32(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: Int64.Type) throws -> Int64 {
@@ -991,24 +1015,29 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
         return i
     }
 
+    private mutating func decodeInteger<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
+        let value = try decode(Int64.self)
+        return try convertInteger(value, to: type, codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)])
+    }
+
     mutating func decode(_ type: UInt.Type) throws -> UInt {
-        UInt(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: UInt8.Type) throws -> UInt8 {
-        UInt8(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: UInt16.Type) throws -> UInt16 {
-        UInt16(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: UInt32.Type) throws -> UInt32 {
-        UInt32(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode(_ type: UInt64.Type) throws -> UInt64 {
-        UInt64(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     mutating func decode<T: Decodable>(_ type: T.Type) throws -> T {
@@ -1183,19 +1212,19 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
     }
 
     func decode(_ type: Int.Type) throws -> Int {
-        Int(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: Int8.Type) throws -> Int8 {
-        Int8(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: Int16.Type) throws -> Int16 {
-        Int16(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: Int32.Type) throws -> Int32 {
-        Int32(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: Int64.Type) throws -> Int64 {
@@ -1205,24 +1234,28 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
         return i
     }
 
+    private func decodeInteger<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
+        try convertInteger(decode(Int64.self), to: type, codingPath: codingPath)
+    }
+
     func decode(_ type: UInt.Type) throws -> UInt {
-        UInt(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: UInt8.Type) throws -> UInt8 {
-        UInt8(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: UInt16.Type) throws -> UInt16 {
-        UInt16(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: UInt32.Type) throws -> UInt32 {
-        UInt32(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode(_ type: UInt64.Type) throws -> UInt64 {
-        UInt64(try decode(Int64.self))
+        try decodeInteger(type)
     }
 
     func decode<T: Decodable>(_ type: T.Type) throws -> T {

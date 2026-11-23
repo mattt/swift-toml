@@ -461,21 +461,6 @@ final class _TOMLEncoder: Encoder {
 // MARK: - Boxing Helpers
 
 private extension _TOMLEncoder {
-    func box(_ value: Bool) -> TOMLValue { .boolean(value) }
-    func box(_ value: Int) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Int8) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Int16) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Int32) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Int64) -> TOMLValue { .integer(value) }
-    func box(_ value: UInt) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: UInt8) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: UInt16) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: UInt32) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: UInt64) -> TOMLValue { .integer(Int64(value)) }
-    func box(_ value: Float) -> TOMLValue { .float(Double(value)) }
-    func box(_ value: Double) -> TOMLValue { .float(value) }
-    func box(_ value: String) -> TOMLValue { .string(value) }
-
     func box(_ date: Date) -> TOMLValue {
         switch options.dateEncodingStrategy {
         case .iso8601:
@@ -562,6 +547,22 @@ private extension _TOMLEncoder {
     }
 }
 
+// MARK: - Integer Encoding
+
+/// Converts an unsigned integer to a TOML integer.
+///
+/// TOML integers are 64-bit signed integers,
+/// so this throws for a value greater than `Int64.max`.
+private func encodeInteger<T: UnsignedInteger>(_ value: T, codingPath: [any CodingKey]) throws -> TOMLValue {
+    guard let integer = Int64(exactly: value) else {
+        throw TOMLEncodingError.invalidValue(
+            "\(value) is greater than the maximum TOML integer, \(Int64.max)",
+            codingPath: codingPath
+        )
+    }
+    return .integer(integer)
+}
+
 // MARK: - Encoding Storage
 
 private final class TOMLEncodingStorage {
@@ -629,7 +630,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     }
 
     mutating func encode(_ value: UInt, forKey key: Key) throws {
-        set(.integer(Int64(value)), forKey: key)
+        set(try encodeInteger(value, codingPath: codingPath + [key]), forKey: key)
     }
 
     mutating func encode(_ value: UInt8, forKey key: Key) throws {
@@ -645,7 +646,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     }
 
     mutating func encode(_ value: UInt64, forKey key: Key) throws {
-        set(.integer(Int64(value)), forKey: key)
+        set(try encodeInteger(value, codingPath: codingPath + [key]), forKey: key)
     }
 
     mutating func encode<T: Encodable>(_ value: T, forKey key: Key) throws {
@@ -745,7 +746,7 @@ private struct TOMLUnkeyedEncodingContainer: UnkeyedEncodingContainer {
     }
 
     mutating func encode(_ value: UInt) throws {
-        append(.integer(Int64(value)))
+        append(try encodeInteger(value, codingPath: codingPath + [TOMLCodingKey(index: count)]))
     }
 
     mutating func encode(_ value: UInt8) throws {
@@ -761,7 +762,7 @@ private struct TOMLUnkeyedEncodingContainer: UnkeyedEncodingContainer {
     }
 
     mutating func encode(_ value: UInt64) throws {
-        append(.integer(Int64(value)))
+        append(try encodeInteger(value, codingPath: codingPath + [TOMLCodingKey(index: count)]))
     }
 
     mutating func encode<T: Encodable>(_ value: T) throws {
@@ -849,7 +850,7 @@ private struct TOMLSingleValueEncodingContainer: SingleValueEncodingContainer {
     }
 
     mutating func encode(_ value: UInt) throws {
-        encoder.setValue(.integer(Int64(value)))
+        encoder.setValue(try encodeInteger(value, codingPath: codingPath))
     }
 
     mutating func encode(_ value: UInt8) throws {
@@ -865,7 +866,7 @@ private struct TOMLSingleValueEncodingContainer: SingleValueEncodingContainer {
     }
 
     mutating func encode(_ value: UInt64) throws {
-        encoder.setValue(.integer(Int64(value)))
+        encoder.setValue(try encodeInteger(value, codingPath: codingPath))
     }
 
     mutating func encode<T: Encodable>(_ value: T) throws {
