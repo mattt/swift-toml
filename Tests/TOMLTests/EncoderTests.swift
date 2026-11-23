@@ -604,15 +604,242 @@ struct EncoderTests {
         #expect(lines[2].hasPrefix("zebra"))
     }
 
-    @Test func prettyPrintedOutput() throws {
-        struct Config: Codable {
-            let name: String
+    /// A value with arrays of each shape that the serializer writes.
+    struct ArrayShapes: Codable, Equatable {
+        struct Server: Codable, Equatable {
+            let hosts: [String]
         }
 
-        let config = Config(name: "test")
+        struct Service: Codable, Equatable {
+            let name: String
+            let ports: [Int]
+        }
+
+        /// An array of an integer and a table,
+        /// which the serializer writes as an inline array with an inline table.
+        struct Mixed: Codable, Equatable {
+            let number: Int
+            let values: [Int]
+
+            enum CodingKeys: String, CodingKey {
+                case values
+            }
+
+            init(number: Int, values: [Int]) {
+                self.number = number
+                self.values = values
+            }
+
+            init(from decoder: any Decoder) throws {
+                var container = try decoder.unkeyedContainer()
+                number = try container.decode(Int.self)
+                values = try container.nestedContainer(keyedBy: CodingKeys.self).decode([Int].self, forKey: .values)
+            }
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.unkeyedContainer()
+                try container.encode(number)
+                var table = container.nestedContainer(keyedBy: CodingKeys.self)
+                try table.encode(values, forKey: .values)
+            }
+        }
+
+        var name = "app"
+        var ports = [8080, 8081]
+        var single = [[1, 2]]
+        var empty: [Int] = []
+        var matrix = [[1, 2], [3]]
+        var cube = [[[1, 2], [3]], [[4, 5]]]
+        var mixed = Mixed(number: 1, values: [2, 3])
+        var server = Server(hosts: ["a", "b"])
+        var services = [Service(name: "web", ports: [80, 443]), Service(name: "db", ports: [5432])]
+    }
+
+    @Test func prettyPrintedOutput() throws {
+        struct Config: Codable {
+            let ports: [Int]
+        }
+
         let encoder = TOMLEncoder()
         encoder.outputFormatting = .prettyPrinted
-        _ = try encoder.encodeToString(config)
+        let toml = try encoder.encodeToString(Config(ports: [8080, 8081]))
+
+        #expect(
+            toml == """
+                ports = [
+                    8080,
+                    8081,
+                ]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedNestedArrays() throws {
+        struct Config: Codable {
+            let matrix: [[Int]]
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let toml = try encoder.encodeToString(Config(matrix: [[1, 2], [3]]))
+
+        #expect(
+            toml == """
+                matrix = [
+                    [
+                        1,
+                        2,
+                    ],
+                    [3],
+                ]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedKeepsInlineTablesOnOneLine() throws {
+        struct Config: Codable {
+            let mixed: ArrayShapes.Mixed
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let toml = try encoder.encodeToString(Config(mixed: .init(number: 1, values: [2, 3])))
+
+        #expect(
+            toml == """
+                mixed = [
+                    1,
+                    { values = [2, 3] },
+                ]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedArrayOfTables() throws {
+        struct Service: Codable {
+            let ports: [Int]
+        }
+        struct Config: Codable {
+            let services: [Service]
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let toml = try encoder.encodeToString(Config(services: [Service(ports: [80, 443]), Service(ports: [5432])]))
+
+        #expect(
+            toml == """
+
+                [[services]]
+                ports = [
+                    80,
+                    443,
+                ]
+
+                [[services]]
+                ports = [5432]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedWithSortedKeys() throws {
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        let toml = try encoder.encodeToString(ArrayShapes())
+
+        #expect(
+            toml == """
+                cube = [
+                    [
+                        [
+                            1,
+                            2,
+                        ],
+                        [3],
+                    ],
+                    [[4, 5]],
+                ]
+                empty = []
+                matrix = [
+                    [
+                        1,
+                        2,
+                    ],
+                    [3],
+                ]
+                mixed = [
+                    1,
+                    { values = [2, 3] },
+                ]
+                name = "app"
+                ports = [
+                    8080,
+                    8081,
+                ]
+                single = [[1, 2]]
+
+                [server]
+                hosts = [
+                    "a",
+                    "b",
+                ]
+
+                [[services]]
+                name = "web"
+                ports = [
+                    80,
+                    443,
+                ]
+
+                [[services]]
+                name = "db"
+                ports = [5432]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedRoundTrip() throws {
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let data = try encoder.encode(ArrayShapes())
+
+        #expect(try TOMLDecoder().decode(ArrayShapes.self, from: data) == ArrayShapes())
+    }
+
+    /// The output without `prettyPrinted` is the same as in version 2.2.2.
+    @Test func defaultOutputUnchanged() throws {
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let toml = try encoder.encodeToString(ArrayShapes())
+
+        #expect(
+            toml == """
+                cube = [[[1, 2], [3]], [[4, 5]]]
+                empty = []
+                matrix = [[1, 2], [3]]
+                mixed = [1, { values = [2, 3] }]
+                name = "app"
+                ports = [8080, 8081]
+                single = [[1, 2]]
+
+                [server]
+                hosts = ["a", "b"]
+
+                [[services]]
+                name = "web"
+                ports = [80, 443]
+
+                [[services]]
+                name = "db"
+                ports = [5432]
+
+                """
+        )
     }
 
     @Test func combinedOutputFormatting() throws {

@@ -163,7 +163,23 @@ public final class TOMLEncoder {
         /// and useful for version control.
         public static let sortedKeys = OutputFormatting(rawValue: 1 << 0)
 
-        /// Format the output with additional whitespace for readability.
+        /// Write each array of more than one element on several lines.
+        ///
+        /// Each element is on its own line, indented four spaces,
+        /// and followed by a comma:
+        ///
+        /// ```toml
+        /// ports = [
+        ///     8080,
+        ///     8081,
+        /// ]
+        /// ```
+        ///
+        /// A nested array of more than one element is indented
+        /// one more level for each level of nesting.
+        /// Empty arrays, arrays of one element and their contents,
+        /// arrays of tables written as `[[name]]` sections,
+        /// and inline tables and their contents stay on one line.
         public static let prettyPrinted = OutputFormatting(rawValue: 1 << 1)
     }
 
@@ -227,12 +243,12 @@ public final class TOMLEncoder {
             throw TOMLEncodingError.invalidValue("No value encoded", codingPath: [])
         }
 
-        return try serialize(value, sortKeys: outputFormatting.contains(.sortedKeys))
+        return try serialize(value)
     }
 
     // MARK: - Private Serialization
 
-    private func serialize(_ value: TOMLValue, sortKeys: Bool) throws -> String {
+    private func serialize(_ value: TOMLValue) throws -> String {
         // A TOML document is a table, so it can't hold another value at the top level.
         guard value.isTable else {
             throw TOMLEncodingError.invalidValue(
@@ -242,11 +258,26 @@ public final class TOMLEncoder {
         }
 
         var result = ""
-        serializeTable(value, to: &result, path: [], sortKeys: sortKeys)
+        let serializer = Serializer(
+            sortKeys: outputFormatting.contains(.sortedKeys),
+            prettyPrinted: outputFormatting.contains(.prettyPrinted)
+        )
+        serializer.serializeTable(value, to: &result, path: [])
         return result
     }
+}
 
-    private func serializeTable(_ value: TOMLValue, to output: inout String, path: [String], sortKeys: Bool) {
+// MARK: - Serialization
+
+/// Writes a TOML document for a table, with the encoder's output formatting.
+private struct Serializer {
+    /// The indentation for each level of a multi-line array.
+    static let indentation = "    "
+
+    let sortKeys: Bool
+    let prettyPrinted: Bool
+
+    func serializeTable(_ value: TOMLValue, to output: inout String, path: [String]) {
         guard case .table(let dict) = value else { return }
 
         let keys = sortKeys ? dict.keys.sorted() : Array(dict.keys)
@@ -269,14 +300,14 @@ public final class TOMLEncoder {
 
         for key in simpleKeys {
             guard let val = dict[key] else { continue }
-            output += "\(escapeKey(key)) = \(serializeValue(val, sortKeys: sortKeys))\n"
+            output += "\(escapeKey(key)) = \(serializeValue(val, indentLevel: prettyPrinted ? 0 : nil))\n"
         }
 
         for key in tableKeys {
             guard let val = dict[key] else { continue }
             let newPath = path + [key]
             output += "\n[\(newPath.map(escapeKey).joined(separator: "."))]\n"
-            serializeTable(val, to: &output, path: newPath, sortKeys: sortKeys)
+            serializeTable(val, to: &output, path: newPath)
         }
 
         for key in arrayOfTablesKeys {
@@ -285,12 +316,17 @@ public final class TOMLEncoder {
             for item in arr {
                 output += "\n[[\(newPath.map(escapeKey).joined(separator: "."))]]"
                 output += "\n"
-                serializeTable(item, to: &output, path: newPath, sortKeys: sortKeys)
+                serializeTable(item, to: &output, path: newPath)
             }
         }
     }
 
-    private func serializeValue(_ value: TOMLValue, sortKeys: Bool) -> String {
+    /// Returns the TOML text for a value.
+    ///
+    /// - Parameter indentLevel: The indentation level of the line where the value starts,
+    ///   if an array of more than one element can span several lines,
+    ///   or `nil` if the value must be on one line.
+    private func serializeValue(_ value: TOMLValue, indentLevel: Int?) -> String {
         switch value {
         case .string(let s):
             return "\"\(escapeString(s))\""
@@ -314,13 +350,23 @@ public final class TOMLEncoder {
         case .localTime(let t):
             return formatLocalTime(t)
         case .array(let arr):
-            let items = arr.map { serializeValue($0, sortKeys: sortKeys) }
+            if let indentLevel, arr.count > 1 {
+                // Write one element on each line, indented one level more than the array.
+                let elementIndentation = String(repeating: Self.indentation, count: indentLevel + 1)
+                let items = arr.map {
+                    "\(elementIndentation)\(serializeValue($0, indentLevel: indentLevel + 1)),\n"
+                }
+                return "[\n\(items.joined())\(String(repeating: Self.indentation, count: indentLevel))]"
+            }
+            let items = arr.map { serializeValue($0, indentLevel: nil) }
             return "[\(items.joined(separator: ", "))]"
         case .table(let dict):
+            // TOML 1.0 doesn't allow newlines in an inline table,
+            // so its values are on one line.
             let keys = sortKeys ? dict.keys.sorted() : Array(dict.keys)
             let items = keys.compactMap { key -> String? in
                 guard let val = dict[key] else { return nil }
-                return "\(escapeKey(key)) = \(serializeValue(val, sortKeys: sortKeys))"
+                return "\(escapeKey(key)) = \(serializeValue(val, indentLevel: nil))"
             }
             return "{ \(items.joined(separator: ", ")) }"
         }
