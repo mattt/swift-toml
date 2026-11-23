@@ -7,17 +7,21 @@ This subpackage contains CLI tools for running the [toml-test](https://github.co
 - Go 1.27 or later (for running toml-test)
 
 The Makefile pins the toml-test version in `TOML_TEST_VERSION`
-and runs the tests for the TOML version in `TOML_VERSION` (default: `1.0.0`).
+and runs the tests for each TOML version in `TOML_VERSIONS` (default: `1.0.0 1.1.0`).
+The decoder implements TOML 1.1.0,
+so the 1.0.0 decoder run skips the invalid cases that TOML 1.1.0 allows.
+`SKIP_1.0.0` in the Makefile lists them.
 
 ## Usage
 
 ```bash
 cd Tests/Integration
-make              # build and run all tests
-make test-decoder # decoder tests only
-make test-encoder # encoder tests only
-make build        # build without running tests
-make clean        # clean build artifacts
+make                    # build and run all tests
+make test-decoder       # decoder tests only
+make test-encoder       # encoder tests only
+make test-decoder-1.1.0 # decoder tests for one TOML version
+make build              # build without running tests
+make clean              # clean build artifacts
 ```
 
 ## Manual Testing
@@ -43,10 +47,10 @@ echo '{"name":{"type":"string","value":"test"}}' | ./.build/debug/toml-encoder
 
 ## Options
 
-Run the tests for another TOML version:
+Run the tests for only one TOML version:
 
 ```bash
-make TOML_VERSION=1.1.0
+make TOML_VERSIONS=1.1.0
 ```
 
 Skip specific tests:
