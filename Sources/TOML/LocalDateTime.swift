@@ -24,7 +24,7 @@ public struct LocalDateTime: Sendable, Equatable, Hashable, Codable {
     /// The minute component (0-59).
     public var minute: Int
 
-    /// The second component (0-59).
+    /// The second component (0-60, where 60 is a leap second).
     public var second: Int
 
     /// The nanosecond component (0-999999999).
@@ -38,7 +38,7 @@ public struct LocalDateTime: Sendable, Equatable, Hashable, Codable {
     ///   - day: The day component (1-31).
     ///   - hour: The hour component (0-23).
     ///   - minute: The minute component (0-59).
-    ///   - second: The second component (0-59).
+    ///   - second: The second component (0-60, where 60 is a leap second).
     ///   - nanosecond: The nanosecond component (0-999999999). Defaults to 0.
     public init(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, nanosecond: Int = 0) {
         self.year = year
@@ -99,7 +99,7 @@ public struct LocalTime: Sendable, Equatable, Hashable, Codable {
     /// The minute component (0-59).
     public var minute: Int
 
-    /// The second component (0-59).
+    /// The second component (0-60, where 60 is a leap second).
     public var second: Int
 
     /// The nanosecond component (0-999999999).
@@ -110,7 +110,7 @@ public struct LocalTime: Sendable, Equatable, Hashable, Codable {
     /// - Parameters:
     ///   - hour: The hour component (0-23).
     ///   - minute: The minute component (0-59).
-    ///   - second: The second component (0-59).
+    ///   - second: The second component (0-60, where 60 is a leap second).
     ///   - nanosecond: The nanosecond component (0-999999999). Defaults to 0.
     public init(hour: Int, minute: Int, second: Int, nanosecond: Int = 0) {
         self.hour = hour

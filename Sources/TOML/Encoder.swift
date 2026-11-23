@@ -2,8 +2,9 @@ import Foundation
 
 /// An encoder that converts Swift values into TOML format.
 ///
-/// This encoder produces output conforming to the
-/// [TOML v1.0.0 specification](https://toml.io/en/v1.0.0).
+/// This encoder produces output that conforms to both the
+/// [TOML v1.0.0](https://toml.io/en/v1.0.0)
+/// and [TOML v1.1.0](https://toml.io/en/v1.1.0) specifications.
 /// It supports all TOML data types including strings, integers, floats, booleans,
 /// dates and times, arrays, and tables.
 ///

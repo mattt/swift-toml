@@ -12,8 +12,12 @@ for fast, spec-compliant parsing with full Swift Codable support.
 
 ## Features
 
-- [x] **100% passing on [toml-test](https://github.com/toml-lang/toml-test) compliance suite**
-- [x] Full [TOML v1.0.0](https://toml.io/en/v1.0.0) specification support
+- [x] **Passes the [toml-test](https://github.com/toml-lang/toml-test) compliance suite** for TOML 1.1.0,
+      and for TOML 1.0.0 except the invalid documents that TOML 1.1.0 allows
+- [x] Full [TOML v1.1.0](https://toml.io/en/v1.1.0) specification support,
+      which also reads [TOML v1.0.0](https://toml.io/en/v1.0.0) documents
+- [x] TOML 1.1 syntax: multi-line inline tables with trailing commas,
+      `\e` and `\xHH` escapes, and times without seconds
 - [x] All data types: strings, integers, floats, booleans, arrays, tables
 - [x] All date-time types: offset date-time, local date-time, local date, local time
 - [x] Inline tables and arrays of tables
@@ -171,6 +175,13 @@ let decoder = TOMLDecoder()
 let event = try decoder.decode(Event.self, from: toml)
 ```
 
+`Date` can't represent a leap second,
+so an offset date-time with second 60, such as `2016-12-31T23:59:60Z`,
+decodes as the following second.
+`LocalTime` and `LocalDateTime` keep second 60.
+The parser accepts second 60 at minute 59
+without checking that a leap second occurred.
+
 ### Key Decoding Strategy
 
 Automatically convert snake_case keys to camelCase:
@@ -224,6 +235,13 @@ For trusted input where you need no restrictions:
 ```swift
 decoder.limits = .unlimited
 ```
+
+The decoder checks `maxInputSize` before parsing.
+For input within that size, the parser rejects documents nested more than about 128 levels deep
+before the other limits apply, so such documents throw `TOMLDecodingError.invalidSyntax`
+whatever the limits are.
+For example, with the default limits, 129 nested empty arrays now throw `invalidSyntax`;
+version 2.1.1 and earlier threw `invalidData`.
 
 ## Development
 

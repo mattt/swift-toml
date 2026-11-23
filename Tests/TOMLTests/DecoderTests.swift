@@ -541,6 +541,35 @@ struct TOMLDecoderTests {
         #expect(config.time.second == 45)
     }
 
+    @Test func decodeLeapSecondOffsetDateTimeAsFollowingSecond() throws {
+        let toml = """
+            date = 2016-12-31T23:59:60Z
+            """
+
+        struct Config: Codable {
+            let date: Date
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+
+        // 2017-01-01T00:00:00Z
+        #expect(config.date == Date(timeIntervalSince1970: 1_483_228_800))
+    }
+
+    @Test func decodeLeapSecondLocalTime() throws {
+        let toml = """
+            time = 23:59:60
+            """
+
+        struct Config: Codable {
+            let time: LocalTime
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+
+        #expect(config.time == LocalTime(hour: 23, minute: 59, second: 60))
+    }
+
     @Test func decodeLocalDateTimeAsDate() throws {
         let toml = """
             datetime = 2024-06-15T10:30:00
@@ -796,6 +825,84 @@ struct TOMLDecoderTests {
         #expect(result["a"]?["b"]?["c"]?["value"] == 1)
     }
 
+    // The parser rejects documents nested more than about 128 levels deep,
+    // before the decoder checks `maxDepth`.
+    // These tests decode with `ArrayNesting`, which does not recurse.
+
+    @Test func parserNestingCeilingAllowsMaximumDepth() throws {
+        let decoder = TOMLDecoder()
+        decoder.limits = .unlimited
+
+        let result = try decoder.decode([String: ArrayNesting].self, from: nestedArrays(128))
+        #expect(result["a"]?.depth == 128)
+        #expect(result["a"]?.hasScalarLeaf == false)
+    }
+
+    @Test func parserNestingCeilingAppliesWithUnlimitedLimits() throws {
+        let decoder = TOMLDecoder()
+        decoder.limits = .unlimited
+
+        #expect {
+            try decoder.decode([String: ArrayNesting].self, from: nestedArrays(129))
+        } throws: { error in
+            isInvalidSyntax(error)
+        }
+    }
+
+    @Test func parserNestingCeilingAppliesBeforeDefaultLimits() throws {
+        // Before toml++ 3.5, this threw `invalidData` from the `maxDepth` check.
+        #expect {
+            try TOMLDecoder().decode([String: ArrayNesting].self, from: nestedArrays(129))
+        } throws: { error in
+            isInvalidSyntax(error)
+        }
+    }
+
+    @Test func defaultMaxDepthAppliesBelowParserCeiling() throws {
+        // The root table has depth 0, so the innermost of 128 arrays has depth 128.
+        #expect {
+            try TOMLDecoder().decode([String: ArrayNesting].self, from: nestedArrays(128))
+        } throws: { error in
+            guard case .invalidData(let message) = error as? TOMLDecodingError else { return false }
+            return message.contains("Maximum nesting depth")
+        }
+    }
+
+    @Test func parserNestingCeilingCountsScalarLeaf() throws {
+        let decoder = TOMLDecoder()
+        decoder.limits = .unlimited
+
+        let result = try decoder.decode([String: ArrayNesting].self, from: nestedArrays(127, leaf: "1"))
+        #expect(result["a"]?.depth == 127)
+        #expect(result["a"]?.hasScalarLeaf == true)
+
+        #expect {
+            try decoder.decode([String: ArrayNesting].self, from: nestedArrays(128, leaf: "1"))
+        } throws: { error in
+            isInvalidSyntax(error)
+        }
+    }
+
+    @Test func decodeAtParserCeilingWithSmallStack() async throws {
+        // Swift concurrency and Dispatch threads can have stacks as small as 512 KB.
+        let result: Result<Int?, any Error> = await withCheckedContinuation { continuation in
+            let thread = Thread {
+                continuation.resume(
+                    returning: Result {
+                        let decoder = TOMLDecoder()
+                        decoder.limits = .unlimited
+                        let value = try decoder.decode([String: ArrayNesting].self, from: nestedArrays(128))
+                        return value["a"]?.depth
+                    }
+                )
+            }
+            thread.stackSize = 512 * 1024
+            thread.start()
+        }
+
+        #expect(try result.get() == 128)
+    }
+
     @Test func decodingLimitsMaxTableKeys() throws {
         let decoder = TOMLDecoder()
         decoder.limits.maxTableKeys = 3
@@ -973,6 +1080,35 @@ struct TOMLDecoderTests {
         }
     }
 
+    @Test func rejectsTableHeaderForTableDefinedByDottedKey() throws {
+        // Version 2.1.1, with toml++ 3.4.0, accepted this document.
+        let toml = """
+            [a.b.c]
+            [a]
+            b.d.e = 1
+            [a.b]
+            """
+
+        #expect {
+            try TOMLDecoder().decode([String: TOMLTable].self, from: toml)
+        } throws: { error in
+            guard case .invalidSyntax(let line, _, _) = error as? TOMLDecodingError else { return false }
+            return line == 4
+        }
+
+        let simple = """
+            [a]
+            b.c = 1
+            [a.b]
+            """
+
+        #expect {
+            try TOMLDecoder().decode([String: TOMLTable].self, from: simple)
+        } throws: { error in
+            isInvalidSyntax(error)
+        }
+    }
+
     // MARK: - Error Descriptions
 
     @Test func errorDescriptionInvalidSyntax() {
@@ -1097,6 +1233,62 @@ struct TOMLDecoderTests {
 
         #expect(config.fruit.apple.color == "red")
         #expect(config.fruit.apple.taste == "sweet")
+    }
+
+    // MARK: - TOML 1.1 Syntax
+
+    @Test func decodeMultilineInlineTableWithTrailingComma() throws {
+        let toml = """
+            point = {
+                x = 1,
+                y = 2, # comment
+            }
+            """
+
+        struct Config: Codable {
+            struct Point: Codable {
+                let x: Int
+                let y: Int
+            }
+            let point: Point
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+
+        #expect(config.point.x == 1)
+        #expect(config.point.y == 2)
+    }
+
+    @Test func decodeEscapeAndByteEscapes() throws {
+        let toml = #"""
+            escape = "\e[0m"
+            byte = "\x41\xE9"
+            """#
+
+        let value = try TOMLDecoder().decode([String: String].self, from: toml)
+
+        #expect(value["escape"] == "\u{1B}[0m")
+        #expect(value["byte"] == "A\u{E9}")
+    }
+
+    @Test func decodeTimesWithoutSeconds() throws {
+        let toml = """
+            time = 07:32
+            local = 1979-05-27T07:32
+            offset = 1979-05-27T07:32Z
+            """
+
+        struct Config: Codable {
+            let time: LocalTime
+            let local: LocalDateTime
+            let offset: Date
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+
+        #expect(config.time == LocalTime(hour: 7, minute: 32, second: 0))
+        #expect(config.local == LocalDateTime(year: 1979, month: 5, day: 27, hour: 7, minute: 32, second: 0))
+        #expect(config.offset == Date(timeIntervalSince1970: 296_638_320))
     }
 
     // MARK: - Boolean Values
@@ -1484,5 +1676,53 @@ struct TOMLDecoderTests {
         #expect(components.year == 2024)
         #expect(components.month == 6)
         #expect(components.day == 15)
+    }
+}
+
+/// A table whose contents the tests do not read.
+private struct TOMLTable: Decodable {
+    init(from decoder: any Decoder) throws {
+        _ = try decoder.container(keyedBy: AnyKey.self)
+    }
+
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+}
+
+/// Returns a document that assigns `depth` nested arrays to `a`,
+/// with `leaf` inside the innermost array.
+private func nestedArrays(_ depth: Int, leaf: String = "") -> String {
+    "a = " + String(repeating: "[", count: depth) + leaf + String(repeating: "]", count: depth) + "\n"
+}
+
+private func isInvalidSyntax(_ error: any Error) -> Bool {
+    guard case .invalidSyntax = error as? TOMLDecodingError else { return false }
+    return true
+}
+
+/// The nesting of an array whose elements are each one nested array,
+/// read without recursion so that deep nesting does not use much stack.
+private struct ArrayNesting: Decodable {
+    /// The number of nested arrays, including the outermost one.
+    var depth = 1
+
+    /// Whether the innermost array contains a value that is not an array.
+    var hasScalarLeaf = false
+
+    init(from decoder: any Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        while !container.isAtEnd {
+            do {
+                container = try container.nestedUnkeyedContainer()
+            } catch DecodingError.typeMismatch {
+                hasScalarLeaf = true
+                break
+            }
+            depth += 1
+        }
     }
 }
