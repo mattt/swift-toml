@@ -1593,6 +1593,116 @@ struct TOMLDecoderTests {
         #expect(config.items.count == 2)
     }
 
+    @Test func unkeyedContainerRetriesAfterFailedDecode() throws {
+        /// Reads each element as an `Int` or, failing that, as a `String`.
+        struct Mixed: Decodable {
+            var elements: [String] = []
+
+            init(from decoder: any Decoder) throws {
+                var container = try decoder.unkeyedContainer()
+                while !container.isAtEnd {
+                    if let int = try? container.decode(Int.self) {
+                        elements.append("\(int)")
+                    } else if let string = try? container.decode(String.self) {
+                        elements.append(string)
+                    } else {
+                        Issue.record("Element \(container.currentIndex) is neither an Int nor a String")
+                        return
+                    }
+                }
+            }
+        }
+
+        struct Config: Decodable {
+            let a: Mixed
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: #"a = [1, "x", 2, "y"]"#)
+        #expect(config.a.elements == ["1", "x", "2", "y"])
+    }
+
+    @Test func unkeyedContainerKeepsIndexAfterFailedDecode() throws {
+        /// Records the index and coding path after each failed decode.
+        struct Probe: Decodable {
+            var indexes: [Int] = []
+            var errorPaths: [[String]] = []
+            var values: [String] = []
+
+            init(from decoder: any Decoder) throws {
+                var container = try decoder.unkeyedContainer()
+                let attempts: [(inout any UnkeyedDecodingContainer) throws -> Void] = [
+                    { _ = try $0.decode(Int.self) },
+                    { _ = try $0.decode(Int8.self) },
+                    { _ = try $0.decode(Bool.self) },
+                    { _ = try $0.decode(Double.self) },
+                    { _ = try $0.decode(Date.self) },
+                    { _ = try $0.decode(LocalDate.self) },
+                    { _ = try $0.decode([String: Int].self) },
+                    { _ = try $0.nestedContainer(keyedBy: AnyKey.self) },
+                    { _ = try $0.nestedUnkeyedContainer() },
+                ]
+                _ = try container.decode(String.self)
+                for attempt in attempts {
+                    do {
+                        try attempt(&container)
+                        Issue.record("Expected a decoding error")
+                    } catch DecodingError.typeMismatch(_, let context) {
+                        errorPaths.append(context.codingPath.map(\.stringValue))
+                    }
+                    indexes.append(container.currentIndex)
+                }
+                values.append(try container.decode(String.self))
+                indexes.append(container.currentIndex)
+
+                // An integer that doesn't fit stays current, too.
+                do {
+                    _ = try container.decode(UInt8.self)
+                    Issue.record("Expected a decoding error")
+                } catch DecodingError.dataCorrupted(let context) {
+                    errorPaths.append(context.codingPath.map(\.stringValue))
+                }
+                indexes.append(container.currentIndex)
+                values.append("\(try container.decode(Int.self))")
+                indexes.append(container.currentIndex)
+
+                // `superDecoder()` moves to the next element.
+                values.append(try container.superDecoder().singleValueContainer().decode(String.self))
+                indexes.append(container.currentIndex)
+            }
+        }
+
+        struct AnyKey: CodingKey {
+            var stringValue: String
+            var intValue: Int? { nil }
+            init(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+
+        struct Config: Decodable {
+            let a: Probe
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: #"a = ["first", "second", 300, "last"]"#)
+
+        #expect(config.a.values == ["second", "300", "last"])
+        #expect(config.a.indexes == Array(repeating: 1, count: 9) + [2, 2, 3, 4])
+        #expect(config.a.errorPaths == Array(repeating: ["a", "Index 1"], count: 9) + [["a", "Index 2"]])
+    }
+
+    @Test func unkeyedContainerErrorPathNamesFailedElement() throws {
+        struct Config: Decodable {
+            let a: [Int]
+        }
+
+        do {
+            _ = try TOMLDecoder().decode(Config.self, from: #"a = [1, 2, "three"]"#)
+            Issue.record("Expected a decoding error")
+        } catch DecodingError.typeMismatch(_, let context) {
+            #expect(context.codingPath.map(\.stringValue) == ["a", "Index 2"])
+            #expect(context.codingPath.last?.intValue == 2)
+        }
+    }
+
     // MARK: - Nested Container Decoding
 
     @Test func decodeNestedKeyedContainers() throws {

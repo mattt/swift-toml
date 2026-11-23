@@ -1054,21 +1054,31 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
 
     var count: Int? { array.count }
     var isAtEnd: Bool { currentIndex >= array.count }
+
+    /// The index of the next element to decode.
+    ///
+    /// Like `JSONDecoder`, the container moves to the next element
+    /// only after it decodes the current element,
+    /// so a caller can try another type after a decode fails.
     var currentIndex: Int = 0
 
-    private mutating func nextValue() throws -> TOMLValue {
+    /// The coding path of the current element.
+    private var currentCodingPath: [any CodingKey] {
+        codingPath + [TOMLCodingKey(index: currentIndex)]
+    }
+
+    /// Returns the current element without moving to the next element.
+    private func currentValue() throws -> TOMLValue {
         guard !isAtEnd else {
             throw DecodingError.valueNotFound(
                 Any.self,
                 DecodingError.Context(
-                    codingPath: codingPath + [TOMLCodingKey(index: currentIndex)],
+                    codingPath: currentCodingPath,
                     debugDescription: "Unkeyed container is at end"
                 )
             )
         }
-        let value = array[currentIndex]
-        currentIndex += 1
-        return value
+        return array[currentIndex]
     }
 
     mutating func decodeNil() throws -> Bool {
@@ -1076,28 +1086,33 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
     }
 
     mutating func decode(_ type: Bool.Type) throws -> Bool {
-        let value = try nextValue()
+        let value = try currentValue()
         guard case .boolean(let b) = value else {
             throw typeMismatchError(type, value: value)
         }
+        currentIndex += 1
         return b
     }
 
     mutating func decode(_ type: String.Type) throws -> String {
-        let value = try nextValue()
+        let value = try currentValue()
         guard case .string(let s) = value else {
             throw typeMismatchError(type, value: value)
         }
+        currentIndex += 1
         return s
     }
 
     mutating func decode(_ type: Double.Type) throws -> Double {
-        let value = try nextValue()
+        let value = try currentValue()
+        let result: Double
         switch value {
-        case .float(let f): return f
-        case .integer(let i): return Double(i)
+        case .float(let f): result = f
+        case .integer(let i): result = Double(i)
         default: throw typeMismatchError(type, value: value)
         }
+        currentIndex += 1
+        return result
     }
 
     mutating func decode(_ type: Float.Type) throws -> Float {
@@ -1121,16 +1136,17 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
     }
 
     mutating func decode(_ type: Int64.Type) throws -> Int64 {
-        let value = try nextValue()
-        guard case .integer(let i) = value else {
-            throw typeMismatchError(type, value: value)
-        }
-        return i
+        try decodeInteger(type)
     }
 
     private mutating func decodeInteger<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
-        let value = try decode(Int64.self)
-        return try convertInteger(value, to: type, codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)])
+        let value = try currentValue()
+        guard case .integer(let i) = value else {
+            throw typeMismatchError(Int64.self, value: value)
+        }
+        let result = try convertInteger(i, to: type, codingPath: currentCodingPath)
+        currentIndex += 1
+        return result
     }
 
     mutating func decode(_ type: UInt.Type) throws -> UInt {
@@ -1154,13 +1170,19 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
     }
 
     mutating func decode<T: Decodable>(_ type: T.Type) throws -> T {
-        let value = try nextValue()
+        let result = try decodeCurrentValue(type)
+        currentIndex += 1
+        return result
+    }
+
+    private func decodeCurrentValue<T: Decodable>(_ type: T.Type) throws -> T {
+        let value = try currentValue()
 
         if type == Date.self {
             return try decodeDate(
                 from: value,
                 strategy: options.dateDecodingStrategy,
-                codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)]
+                codingPath: currentCodingPath
             ) as! T
         }
         if type == LocalDateTime.self {
@@ -1182,16 +1204,13 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
             return t as! T
         }
         if type == URL.self, case .string(let string) = value {
-            return try decodeURL(
-                from: string,
-                codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)]
-            ) as! T
+            return try decodeURL(from: string, codingPath: currentCodingPath) as! T
         }
 
         return try _TOMLDecoder.decode(
             type,
             from: value,
-            codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+            codingPath: currentCodingPath,
             userInfo: userInfo,
             options: options
         )
@@ -1200,49 +1219,53 @@ private struct TOMLUnkeyedDecodingContainer: UnkeyedDecodingContainer {
     mutating func nestedContainer<NestedKey: CodingKey>(
         keyedBy type: NestedKey.Type
     ) throws -> KeyedDecodingContainer<NestedKey> {
-        let value = try nextValue()
+        let value = try currentValue()
         guard case .table(let dict) = value else {
             throw typeMismatchError([String: Any].self, value: value)
         }
 
         let container = TOMLKeyedDecodingContainer<NestedKey>(
             table: dict,
-            codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+            codingPath: currentCodingPath,
             userInfo: userInfo,
             options: options
         )
+        currentIndex += 1
         return KeyedDecodingContainer(container)
     }
 
     mutating func nestedUnkeyedContainer() throws -> any UnkeyedDecodingContainer {
-        let value = try nextValue()
+        let value = try currentValue()
         guard case .array(let arr) = value else {
             throw typeMismatchError([Any].self, value: value)
         }
 
-        return TOMLUnkeyedDecodingContainer(
+        let container = TOMLUnkeyedDecodingContainer(
             array: arr,
-            codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+            codingPath: currentCodingPath,
             userInfo: userInfo,
             options: options
         )
+        currentIndex += 1
+        return container
     }
 
     mutating func superDecoder() throws -> any Decoder {
-        let value = try nextValue()
-        return _TOMLDecoder(
-            value: value,
-            codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+        let decoder = _TOMLDecoder(
+            value: try currentValue(),
+            codingPath: currentCodingPath,
             userInfo: userInfo,
             options: options
         )
+        currentIndex += 1
+        return decoder
     }
 
     private func typeMismatchError<T>(_ type: T.Type, value: TOMLValue) -> DecodingError {
         DecodingError.typeMismatch(
             type,
             DecodingError.Context(
-                codingPath: codingPath + [TOMLCodingKey(index: currentIndex - 1)],
+                codingPath: currentCodingPath,
                 debugDescription: "Expected \(type), found \(valueTypeName(value))"
             )
         )
