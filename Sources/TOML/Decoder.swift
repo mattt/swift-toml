@@ -470,11 +470,17 @@ public final class TOMLDecoder {
                 components.minute = Int(dt.time.minute)
                 components.second = Int(dt.time.second)
                 components.nanosecond = Int(dt.time.nanosecond)
-                components.timeZone = TimeZone(secondsFromGMT: Int(dt.offset_minutes) * 60)
 
-                if let date = Calendar(identifier: .gregorian).date(from: components) {
-                    return .offsetDateTime(date)
+                // `TimeZone(secondsFromGMT:)` rejects offsets above 18 hours,
+                // but TOML allows offsets up to 23:59,
+                // so read the components as UTC and then apply the offset.
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+                guard let utcDate = calendar.date(from: components) else {
+                    throw TOMLDecodingError.invalidData("Offset date-time is not a valid date")
                 }
+                let offset = TimeInterval(Int(dt.offset_minutes) * 60)
+                return .offsetDateTime(utcDate.addingTimeInterval(-offset))
             }
             return .localDateTime(
                 LocalDateTime(

@@ -487,6 +487,41 @@ struct TOMLDecoderTests {
         #expect(config.timestamp.timeIntervalSince1970 > 0)
     }
 
+    /// Offsets and their values in seconds:
+    /// offsets above 18 hours, which `TimeZone(secondsFromGMT:)` rejects,
+    /// and offsets that it accepts.
+    static let offsets: [(String, Int)] = [
+        ("+19:00", 68_400),
+        ("+23:59", 86_340),
+        ("-23:59", -86_340),
+        ("+18:00", 64_800),
+        ("-18:00", -64_800),
+        ("+05:30", 19_800),
+        ("Z", 0),
+    ]
+
+    @Test(arguments: offsets)
+    func decodeOffsetDateTimeInstant(offset: String, offsetSeconds: Int) throws {
+        struct Config: Codable {
+            let timestamp: Date
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: "timestamp = 2024-01-15T09:30:00\(offset)")
+
+        // 2024-01-15T09:30:00Z is 1705311000 seconds after the epoch.
+        let expected = 1_705_311_000 - TimeInterval(offsetSeconds)
+        #expect(config.timestamp.timeIntervalSince1970 == expected)
+    }
+
+    @Test func decodeOffsetDateTimeAboveEighteenHours() throws {
+        struct Config: Codable {
+            let timestamp: Date
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: "timestamp = 2024-01-15T09:30:00+19:00")
+        #expect(config.timestamp.timeIntervalSince1970 == 1_705_242_600)
+    }
+
     @Test func decodeLocalDateTime() throws {
         let toml = """
             datetime = 2024-06-15T10:30:00
