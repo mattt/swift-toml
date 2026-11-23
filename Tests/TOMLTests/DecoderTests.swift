@@ -1081,14 +1081,29 @@ struct TOMLDecoderTests {
     }
 
     @Test func rejectsTableHeaderForTableDefinedByDottedKey() throws {
+        // Version 2.1.1, with toml++ 3.4.0, accepted this document.
         let toml = """
+            [a.b.c]
+            [a]
+            b.d.e = 1
+            [a.b]
+            """
+
+        #expect {
+            try TOMLDecoder().decode([String: TOMLTable].self, from: toml)
+        } throws: { error in
+            guard case .invalidSyntax(let line, _, _) = error as? TOMLDecodingError else { return false }
+            return line == 4
+        }
+
+        let simple = """
             [a]
             b.c = 1
             [a.b]
             """
 
         #expect {
-            try TOMLDecoder().decode([String: [String: [String: Int]]].self, from: toml)
+            try TOMLDecoder().decode([String: TOMLTable].self, from: simple)
         } throws: { error in
             isInvalidSyntax(error)
         }
@@ -1661,6 +1676,20 @@ struct TOMLDecoderTests {
         #expect(components.year == 2024)
         #expect(components.month == 6)
         #expect(components.day == 15)
+    }
+}
+
+/// A table whose contents the tests do not read.
+private struct TOMLTable: Decodable {
+    init(from decoder: any Decoder) throws {
+        _ = try decoder.container(keyedBy: AnyKey.self)
+    }
+
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
     }
 }
 
