@@ -18,9 +18,10 @@ SKIP_1.0.0 := invalid/datetime/no-secs,invalid/local-datetime/no-secs,invalid/lo
 
 all: test
 
-build: $(DECODER) $(ENCODER)
-
-$(DECODER) $(ENCODER): Sources/**/*.swift Package.swift ../..
+# `build` is phony, so it always runs `swift build`
+# and SwiftPM decides what to rebuild.
+# File timestamps in this Makefile cannot see edits to the library in `../..`.
+build:
 	swift build
 
 test: test-decoder test-encoder
@@ -31,14 +32,14 @@ test-encoder: $(addprefix test-encoder-,$(TOML_VERSIONS))
 
 # These pattern targets are not in .PHONY,
 # because make does not apply pattern rules to phony targets.
-test-decoder-%: $(DECODER)
+test-decoder-%: build
 	$(TOML_TEST) test -toml=$* -decoder=$(DECODER) $(if $(SKIP_$*),-skip='$(SKIP_$*)' -skip-must-err)
 
 # toml-test checks the encoder's output with its own Go parser,
 # not with the decoder.
 # The toml-test command requires `-decoder` even when it runs only encoder tests.
 # Each `*` matches one path segment.
-test-encoder-%: $(DECODER) $(ENCODER)
+test-encoder-%: build
 	$(TOML_TEST) test -toml=$* -decoder=$(DECODER) -encoder=$(ENCODER) -run='encoder/*,encoder/*/*'
 
 clean:
