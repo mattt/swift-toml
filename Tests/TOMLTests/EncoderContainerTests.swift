@@ -230,13 +230,70 @@ struct EncoderContainerTests {
         }
     }
 
+    /// Encodes a value that asks for conflicting containers
+    /// with its parent's super encoder.
+    struct SuperEncoderConflict: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case b
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(1, forKey: .b)
+            try KeyedThenUnkeyed().encode(to: container.superEncoder())
+        }
+    }
+
     @Test func conflictingContainersThrow() {
+        // In a wrapper, the array that the unkeyed container used to leave
+        // is a valid document, so only the conflict makes this throw.
         expectInvalidValue(codingPath: []) {
-            try TOMLEncoder().encode(KeyedThenUnkeyed())
+            try TOMLEncoder().encode(Wrapper(value: KeyedThenUnkeyed()))
+        }
+        expectInvalidValue(codingPath: []) {
+            try TOMLEncoder().encode(Wrapper(value: Wrapper(value: KeyedThenUnkeyed())))
         }
         expectInvalidValue(codingPath: ["a"]) {
             try TOMLEncoder().encode(ValueThenNestedContainer())
         }
+        expectInvalidValue(codingPath: ["super"]) {
+            try TOMLEncoder().encode(SuperEncoderConflict())
+        }
+    }
+
+    /// Catches the error from a value that asks for conflicting containers,
+    /// and writes other values in its place.
+    struct FallbackAfterError: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case bad, good, later
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            do {
+                try container.encode(KeyedThenUnkeyed(), forKey: .bad)
+            } catch {
+                try container.encode(3, forKey: .good)
+                try container.encode(Wrapper(value: 4), forKey: .later)
+            }
+        }
+    }
+
+    @Test func caughtContainerErrorPermitsFallback() throws {
+        let toml = try TOMLEncoder().encode(FallbackAfterError())
+        #expect(
+            try TOMLDecoder().decode(EncodedTree.self, from: toml)
+                == .table(["good": .integer(3), "later": .table(["value": .integer(4)])])
+        )
+    }
+
+    @Test func encoderSucceedsAfterFailedEncode() throws {
+        let encoder = TOMLEncoder()
+        expectInvalidValue(codingPath: []) {
+            try encoder.encode(Wrapper(value: KeyedThenUnkeyed()))
+        }
+        let toml = try encoder.encode(TwoKeyedContainers())
+        #expect(try TOMLDecoder().decode(EncodedTree.self, from: toml) == .table(["a": .integer(1), "b": .integer(2)]))
     }
 
     private func expectInvalidValue(
@@ -250,7 +307,8 @@ struct EncoderContainerTests {
                 "Expected an encoding error, got \(String(decoding: data, as: UTF8.self))",
                 sourceLocation: sourceLocation
             )
-        } catch TOMLEncodingError.invalidValue(_, let codingPath) {
+        } catch TOMLEncodingError.invalidValue(let message, let codingPath) {
+            #expect(message.contains("container"), sourceLocation: sourceLocation)
             #expect(codingPath.map(\.stringValue) == expectedPath, sourceLocation: sourceLocation)
         } catch {
             Issue.record("Unexpected error: \(error)", sourceLocation: sourceLocation)

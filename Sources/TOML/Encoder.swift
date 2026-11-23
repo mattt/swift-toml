@@ -433,9 +433,11 @@ final class _TOMLEncoder: Encoder {
     /// or `nil` if nothing is encoded yet.
     fileprivate var storage: EncodedValue?
 
-    /// The state shared by every encoder in one encoding operation.
+    /// The errors that this encoder, its containers, and its super encoders record.
     private let context: EncodingContext
 
+    /// Creates an encoder with its own error context,
+    /// for the top-level value or a value that a container boxes.
     convenience init(codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any], options: EncodingOptions) {
         self.init(codingPath: codingPath, userInfo: userInfo, options: options, context: EncodingContext())
     }
@@ -452,8 +454,8 @@ final class _TOMLEncoder: Encoder {
         self.context = context
     }
 
-    /// Returns a new encoder at the given coding path
-    /// that shares this encoder's options and state.
+    /// Returns a super encoder at the given coding path
+    /// that shares this encoder's options and error context.
     fileprivate func makeEncoder(codingPath: [any CodingKey]) -> _TOMLEncoder {
         _TOMLEncoder(codingPath: codingPath, userInfo: userInfo, options: options, context: context)
     }
@@ -470,8 +472,10 @@ final class _TOMLEncoder: Encoder {
         return storage?.resolved()
     }
 
-    /// Records an error to throw when encoding finishes,
-    /// for a fault in a method that can't throw.
+    /// Records an error for a fault in a method that can't throw.
+    ///
+    /// ``encodedValue()`` throws the error
+    /// when the value that this encoder encodes is finished.
     ///
     /// Only the first error is kept.
     fileprivate func recordError(_ message: String, codingPath: [any CodingKey]) {
@@ -605,7 +609,9 @@ private extension _TOMLEncoder {
             return .string(url.absoluteString)
         }
 
-        let encoder = makeEncoder(codingPath: codingPath)
+        // The value gets its own error context,
+        // so an error that the caller catches doesn't reach later values.
+        let encoder = _TOMLEncoder(codingPath: codingPath, userInfo: userInfo, options: options)
         try value.encode(to: encoder)
 
         if let v = try encoder.encodedValue() {
@@ -661,7 +667,12 @@ private func encodeInteger<T: UnsignedInteger>(_ value: T, codingPath: [any Codi
 
 // MARK: - Encoding Storage
 
-/// The state shared by every encoder in one encoding operation.
+/// The errors that an encoder, its containers, and its super encoders record.
+///
+/// The top-level value and each value that a container boxes
+/// get their own context,
+/// so an error reaches the code that encodes that value,
+/// and a caller that catches it can write another value.
 private final class EncodingContext {
     /// The first error that a container recorded
     /// in a method that can't throw.
