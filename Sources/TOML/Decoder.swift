@@ -1383,7 +1383,9 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
     }
 
     func decode(_ type: Float.Type) throws -> Float {
-        Float(try decode(Double.self))
+        // Check for a missing value first, so that the error names `Float`.
+        _ = try requireValue(type)
+        return Float(try decode(Double.self))
     }
 
     func decode(_ type: Int.Type) throws -> Int {
@@ -1411,7 +1413,9 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
     }
 
     private func decodeInteger<T: FixedWidthInteger>(_ type: T.Type) throws -> T {
-        try convertInteger(decode(Int64.self), to: type, codingPath: codingPath)
+        // Check for a missing value first, so that the error names the requested type.
+        _ = try requireValue(type)
+        return try convertInteger(decode(Int64.self), to: type, codingPath: codingPath)
     }
 
     func decode(_ type: UInt.Type) throws -> UInt {
