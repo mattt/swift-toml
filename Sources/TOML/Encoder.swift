@@ -474,9 +474,10 @@ private extension _TOMLEncoder {
         case .iso8601:
             return .offsetDateTime(date)
         case .localDateTime:
-            let components = Calendar.current.dateComponents(
+            let components = gregorianComponents(
                 [.year, .month, .day, .hour, .minute, .second, .nanosecond],
-                from: date
+                of: date,
+                inTimeZoneOf: .current
             )
             return .localDateTime(
                 LocalDateTime(
@@ -490,7 +491,7 @@ private extension _TOMLEncoder {
                 )
             )
         case .localDate:
-            let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+            let components = gregorianComponents([.year, .month, .day], of: date, inTimeZoneOf: .current)
             return .localDate(
                 LocalDate(
                     year: components.year ?? 0,
@@ -499,9 +500,10 @@ private extension _TOMLEncoder {
                 )
             )
         case .localTime:
-            let components = Calendar.current.dateComponents(
+            let components = gregorianComponents(
                 [.hour, .minute, .second, .nanosecond],
-                from: date
+                of: date,
+                inTimeZoneOf: .current
             )
             return .localTime(
                 LocalTime(
@@ -553,6 +555,24 @@ private extension _TOMLEncoder {
             return key.stringValue.convertToSnakeCase()
         }
     }
+}
+
+// MARK: - Local Date Components
+
+/// Returns the components of a date in the Gregorian calendar,
+/// in the time zone of the given calendar.
+///
+/// TOML dates use the Gregorian calendar, as ``TOMLDecoder`` does,
+/// so this ignores the calendar system of `calendar`,
+/// such as the Buddhist or Japanese calendar, and uses only its time zone.
+func gregorianComponents(
+    _ components: Set<Calendar.Component>,
+    of date: Date,
+    inTimeZoneOf calendar: Calendar
+) -> DateComponents {
+    var gregorian = Calendar(identifier: .gregorian)
+    gregorian.timeZone = calendar.timeZone
+    return gregorian.dateComponents(components, from: date)
 }
 
 // MARK: - Integer Encoding
