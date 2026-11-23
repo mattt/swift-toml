@@ -456,6 +456,105 @@ struct EncoderContainerTests {
                 ])
         )
     }
+
+    // MARK: - Key Encoding Strategy
+
+    class SnakeBase: Encodable {
+        let baseValue = 1
+    }
+
+    /// Writes camel-case keys in nested containers and super encoders.
+    final class SnakeDerived: SnakeBase {
+        enum CodingKeys: String, CodingKey {
+            case outerTable, innerValue, listItems, itemName, parentInfo
+        }
+
+        override func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            var outer = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .outerTable)
+            try outer.encode(2, forKey: .innerValue)
+            var list = container.nestedUnkeyedContainer(forKey: .listItems)
+            var item = list.nestedContainer(keyedBy: CodingKeys.self)
+            try item.encode("three", forKey: .itemName)
+            try super.encode(to: container.superEncoder())
+            try super.encode(to: container.superEncoder(forKey: .parentInfo))
+        }
+    }
+
+    @Test func snakeCaseKeysInNestedContainersAndSuperEncoders() throws {
+        let tree = try expectSameStructure(SnakeDerived(), snakeCaseKeys: true)
+        #expect(
+            tree
+                == .table([
+                    "outer_table": .table(["inner_value": .integer(2)]),
+                    "list_items": .array([.table(["item_name": .string("three")])]),
+                    "super": .table(["base_value": .integer(1)]),
+                    "parent_info": .table(["base_value": .integer(1)]),
+                ])
+        )
+    }
+
+    // MARK: - Synthesized Conformance
+
+    struct Package: Codable, Equatable {
+        struct Author: Codable, Equatable {
+            let name: String
+            let email: String
+        }
+
+        struct Dependency: Codable, Equatable {
+            let name: String
+            let versions: [String]
+        }
+
+        let name: String
+        let author: Author
+        let dependencies: [Dependency]
+        let tags: [String]
+        let matrix: [[Int]]
+    }
+
+    /// A synthesized `Codable` struct encodes as it did before
+    /// the encoder kept nested containers.
+    @Test func synthesizedStructEncodesUnchanged() throws {
+        let package = Package(
+            name: "toml",
+            author: .init(name: "Ada", email: "ada@example.com"),
+            dependencies: [
+                .init(name: "parser", versions: ["1.0", "1.1"]),
+                .init(name: "printer", versions: []),
+            ],
+            tags: ["config", "format"],
+            matrix: [[1, 2], [3]]
+        )
+
+        try expectSameStructure(package)
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let toml = try encoder.encodeToString(package)
+        #expect(
+            toml == """
+                matrix = [[1, 2], [3]]
+                name = "toml"
+                tags = ["config", "format"]
+
+                [author]
+                email = "ada@example.com"
+                name = "Ada"
+
+                [[dependencies]]
+                name = "parser"
+                versions = ["1.0", "1.1"]
+
+                [[dependencies]]
+                name = "printer"
+                versions = []
+
+                """
+        )
+        #expect(try TOMLDecoder().decode(Package.self, from: toml) == package)
+    }
 }
 
 // MARK: - Structure Comparison
