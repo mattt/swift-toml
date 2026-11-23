@@ -449,6 +449,128 @@ struct EncoderTests {
         #expect(toml.contains("created_at = 123"))
     }
 
+    /// A key that a test chooses at run time.
+    struct DynamicKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+
+        init(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            nil
+        }
+    }
+
+    /// Encodes one integer at a key that the test chooses.
+    struct SingleKey: Encodable {
+        let key: String
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: DynamicKey.self)
+            try container.encode(1, forKey: DynamicKey(stringValue: key))
+        }
+    }
+
+    @Test(
+        arguments: [
+            "userID", "URLSession", "myURLValue", "PATH", "a", "A", "_leading", "_Leading", "trailing_",
+            "trailingX_", "alreadySnake_case", "version2Name", "v2URL", "x1Y2", "HTTPServer2Go", "aBC", "ABc",
+            "a_B", "__a__B", "", "fooÜber", "ÉtéÀ",
+        ]
+    )
+    func convertToSnakeCaseMatchesJSONEncoder(key: String) throws {
+        let tomlEncoder = TOMLEncoder()
+        tomlEncoder.keyEncodingStrategy = .convertToSnakeCase
+        let jsonEncoder = JSONEncoder()
+        jsonEncoder.keyEncodingStrategy = .convertToSnakeCase
+
+        let toml = try TOMLDecoder().decode([String: Int].self, from: tomlEncoder.encode(SingleKey(key: key)))
+        let json = try JSONDecoder().decode([String: Int].self, from: jsonEncoder.encode(SingleKey(key: key)))
+        #expect(Array(toml.keys) == Array(json.keys))
+    }
+
+    @Test func convertToSnakeCaseAcronyms() throws {
+        struct Config: Codable {
+            let userID: Int
+            let myURLValue: Int
+            let version2Name: Int
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.outputFormatting = .sortedKeys
+        let toml = try encoder.encodeToString(Config(userID: 1, myURLValue: 2, version2Name: 3))
+
+        #expect(
+            toml == """
+                my_url_value = 2
+                user_id = 1
+                version2_name = 3
+
+                """
+        )
+    }
+
+    @Test func convertToSnakeCaseInNestedContainersAndDictionaries() throws {
+        struct Inner: Codable {
+            let innerID: Int
+        }
+        struct Config: Codable {
+            let serverURL: Inner
+            let itemList: [Inner]
+            let tableByName: [String: Int]
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let config = Config(
+            serverURL: Inner(innerID: 1),
+            itemList: [Inner(innerID: 2)],
+            tableByName: ["myURLValue": 3]
+        )
+        let value = try TOMLDecoder().decode(EncodedTree.self, from: encoder.encode(config))
+
+        // Unlike `JSONEncoder`, `TOMLEncoder` also converts the keys of a dictionary with `String` keys.
+        #expect(
+            value
+                == .table([
+                    "server_url": .table(["inner_id": .integer(1)]),
+                    "item_list": .array([.table(["inner_id": .integer(2)])]),
+                    "table_by_name": .table(["my_url_value": .integer(3)]),
+                ])
+        )
+    }
+
+    /// An explicit coding key round-trips a property such as `userID`,
+    /// which the key strategies alone don't.
+    @Test func convertToSnakeCaseRoundTripWithExplicitCodingKey() throws {
+        struct Implicit: Codable, Equatable {
+            let userID: Int
+        }
+        struct Explicit: Codable, Equatable {
+            let userID: Int
+
+            enum CodingKeys: String, CodingKey {
+                case userID = "userId"
+            }
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        #expect(try encoder.encodeToString(Implicit(userID: 1)) == "user_id = 1\n")
+        #expect(throws: DecodingError.self) {
+            try decoder.decode(Implicit.self, from: encoder.encode(Implicit(userID: 1)))
+        }
+
+        #expect(try encoder.encodeToString(Explicit(userID: 1)) == "user_id = 1\n")
+        #expect(try decoder.decode(Explicit.self, from: encoder.encode(Explicit(userID: 1))) == Explicit(userID: 1))
+    }
+
     @Test func encodeUseDefaultKeys() throws {
         struct Config: Codable {
             let userName: String

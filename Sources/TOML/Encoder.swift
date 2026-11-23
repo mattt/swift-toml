@@ -105,6 +105,21 @@ public final class TOMLEncoder {
         /// Convert keys from camelCase to snake_case.
         ///
         /// For example, `userName` in Swift becomes `user_name` in TOML.
+        ///
+        /// This strategy writes the same keys as `JSONEncoder`'s strategy of the same name.
+        /// A run of uppercase letters is one word,
+        /// so `myURLValue` becomes `my_url_value` and `userID` becomes `user_id`.
+        /// The first character never starts a new word,
+        /// so `URLSession` becomes `u_rl_session`.
+        /// Leading and trailing underscores stay.
+        ///
+        /// As with `JSONEncoder` and `JSONDecoder`,
+        /// a property such as `userID` doesn't round-trip
+        /// with ``TOMLDecoder/KeyDecodingStrategy/convertFromSnakeCase``,
+        /// because `user_id` decodes as `userId`.
+        /// To round-trip such a property under both strategies,
+        /// give it an explicit `CodingKeys` raw value that each strategy converts to the other,
+        /// such as `case userID = "userId"`.
         case convertToSnakeCase
     }
 
@@ -1168,19 +1183,66 @@ private struct TOMLSingleValueEncodingContainer: SingleValueEncodingContainer {
 // MARK: - Private Extensions
 
 private extension String {
+    /// Converts a camelCase key to snake_case, as `JSONEncoder` does.
+    ///
+    /// This follows Foundation's algorithm.
+    /// A word starts at an uppercase letter that follows a letter that isn't uppercase,
+    /// and at the last letter of a run of uppercase letters that a lowercase letter follows.
+    /// The first character never starts a word.
+    /// The conversion joins the words with underscores and lowercases them.
+    /// It keeps leading and trailing underscores.
+    ///
+    /// For example, `userID` becomes `user_id`, `myURLValue` becomes `my_url_value`,
+    /// `URLSession` becomes `u_rl_session`, and `PATH` becomes `p_ath`.
     func convertToSnakeCase() -> String {
-        var result = ""
-        for (index, char) in self.enumerated() {
-            if char.isUppercase {
-                if index > 0 {
-                    result += "_"
-                }
-                result += char.lowercased()
-            } else {
-                result.append(char)
+        let scalars = unicodeScalars
+        guard !scalars.isEmpty else { return self }
+
+        var words: [Range<String.Index>] = []
+        var wordStart = scalars.startIndex
+        var searchStart = scalars.index(after: wordStart)
+
+        while let upper = scalars[searchStart...].firstIndex(where: \.isUppercaseLetter) {
+            words.append(wordStart ..< upper)
+
+            guard let lower = scalars[upper...].firstIndex(where: \.isLowercaseLetter) else {
+                // No lowercase letters follow, so the rest of the key is one word.
+                wordStart = upper
+                break
             }
+
+            if lower == scalars.index(after: upper) {
+                // A lowercase letter follows the uppercase letter, so they're in one word.
+                wordStart = upper
+            } else {
+                // A run of uppercase letters is a word,
+                // except for its last letter, which starts the next word.
+                let beforeLower = scalars.index(before: lower)
+                words.append(upper ..< beforeLower)
+                wordStart = beforeLower
+            }
+            searchStart = scalars.index(after: lower)
         }
-        return result
+        words.append(wordStart ..< scalars.endIndex)
+
+        return words.map { String(scalars[$0]).lowercased() }.joined(separator: "_")
+    }
+}
+
+private extension Unicode.Scalar {
+    /// Whether the scalar is in the Unicode general category Lu or Lt,
+    /// as in Foundation's `uppercaseLetters` character set.
+    var isUppercaseLetter: Bool {
+        switch properties.generalCategory {
+        case .uppercaseLetter, .titlecaseLetter: return true
+        default: return false
+        }
+    }
+
+    /// Whether the scalar is in the Unicode general category Ll,
+    /// as in Foundation's `lowercaseLetters` character set.
+    var isLowercaseLetter: Bool {
+        properties.generalCategory == .lowercaseLetter
     }
 }
 
