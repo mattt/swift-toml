@@ -19,6 +19,8 @@ jobs:
 
       - name: Check for updates
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./Scripts/update-tomlplusplus.sh --check --github-output "$GITHUB_OUTPUT"
 
       - name: Create issue if update available

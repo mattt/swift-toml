@@ -59,9 +59,22 @@ else
     echo "No existing toml.hpp found"
 fi
 
-# Get latest version from GitHub API
+# Get latest version from GitHub API.
+# Use GH_TOKEN or GITHUB_TOKEN when set, in the same order as the gh command,
+# because unauthenticated requests have a low rate limit.
+# curl reads the header from standard input (`-H @-`),
+# so the token is not in its arguments, where other processes can see it.
+github_api_get() {
+    local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if [[ -n "$token" ]]; then
+        printf 'Authorization: Bearer %s\n' "$token" | curl -sf -H @- "$1"
+    else
+        curl -sf "$1"
+    fi
+}
+
 echo "Checking for latest release..."
-GITHUB_JSON=$(curl -sf "https://api.github.com/repos/${TOMLPP_REPO}/releases/latest") || {
+GITHUB_JSON=$(github_api_get "https://api.github.com/repos/${TOMLPP_REPO}/releases/latest") || {
     echo "Error: Failed to fetch latest release from GitHub (network error or non-2xx response)" >&2
     exit 1
 }
