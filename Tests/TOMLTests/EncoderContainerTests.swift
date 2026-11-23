@@ -256,6 +256,206 @@ struct EncoderContainerTests {
             Issue.record("Unexpected error: \(error)", sourceLocation: sourceLocation)
         }
     }
+
+    // MARK: - Super Encoders and Class Hierarchies
+
+    class Base: Codable {
+        let a: Int
+
+        enum CodingKeys: String, CodingKey {
+            case a
+        }
+
+        init(a: Int) {
+            self.a = a
+        }
+    }
+
+    /// Encodes its superclass with the same encoder.
+    class Derived: Base {
+        let b: Int
+
+        enum CodingKeys: String, CodingKey {
+            case b
+        }
+
+        init(a: Int, b: Int) {
+            self.b = b
+            super.init(a: a)
+        }
+
+        required init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            b = try container.decode(Int.self, forKey: .b)
+            try super.init(from: decoder)
+        }
+
+        override func encode(to encoder: any Encoder) throws {
+            try super.encode(to: encoder)
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(b, forKey: .b)
+        }
+    }
+
+    /// Adds a third level to ``Derived``.
+    final class Leaf: Derived {
+        let c: Int
+
+        enum CodingKeys: String, CodingKey {
+            case c
+        }
+
+        init(a: Int, b: Int, c: Int) {
+            self.c = c
+            super.init(a: a, b: b)
+        }
+
+        required init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            c = try container.decode(Int.self, forKey: .c)
+            try super.init(from: decoder)
+        }
+
+        override func encode(to encoder: any Encoder) throws {
+            try super.encode(to: encoder)
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(c, forKey: .c)
+        }
+    }
+
+    /// Encodes its superclass with `superEncoder()`,
+    /// after it encodes its own property.
+    ///
+    /// The tests don't decode this class,
+    /// because `TOMLDecoder`'s keyed `superDecoder()` reads the whole table
+    /// and not the `super` key that `JSONDecoder` reads.
+    final class SuperEncoded: Base {
+        let b: Int
+
+        enum CodingKeys: String, CodingKey {
+            case b
+        }
+
+        init(a: Int, b: Int) {
+            self.b = b
+            super.init(a: a)
+        }
+
+        required init(from decoder: any Decoder) throws {
+            fatalError("Not decoded in these tests")
+        }
+
+        override func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            let superEncoder = container.superEncoder()
+            try container.encode(b, forKey: .b)
+            try super.encode(to: superEncoder)
+        }
+    }
+
+    /// Encodes its superclass with `superEncoder(forKey:)`.
+    final class SuperEncodedForKey: Base {
+        let b: Int
+
+        enum CodingKeys: String, CodingKey {
+            case b, parent
+        }
+
+        init(a: Int, b: Int) {
+            self.b = b
+            super.init(a: a)
+        }
+
+        required init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            b = try container.decode(Int.self, forKey: .b)
+            try super.init(from: container.superDecoder(forKey: .parent))
+        }
+
+        override func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(b, forKey: .b)
+            try super.encode(to: container.superEncoder(forKey: .parent))
+        }
+    }
+
+    @Test func subclassEncodesSuperclassWithSameEncoder() throws {
+        let tree = try expectSameStructure(Derived(a: 1, b: 2))
+        #expect(tree == .table(["a": .integer(1), "b": .integer(2)]))
+    }
+
+    @Test func threeLevelClassHierarchy() throws {
+        let tree = try expectSameStructure(Leaf(a: 1, b: 2, c: 3))
+        #expect(tree == .table(["a": .integer(1), "b": .integer(2), "c": .integer(3)]))
+    }
+
+    @Test func subclassEncodesSuperclassWithSuperEncoder() throws {
+        let tree = try expectSameStructure(SuperEncoded(a: 1, b: 2))
+        #expect(tree == .table(["b": .integer(2), "super": .table(["a": .integer(1)])]))
+    }
+
+    @Test func subclassEncodesSuperclassWithSuperEncoderForKey() throws {
+        let tree = try expectSameStructure(SuperEncodedForKey(a: 1, b: 2))
+        #expect(tree == .table(["b": .integer(2), "parent": .table(["a": .integer(1)])]))
+    }
+
+    @Test func classHierarchiesRoundTrip() throws {
+        let encoder = TOMLEncoder()
+        let decoder = TOMLDecoder()
+
+        let derived = try decoder.decode(Derived.self, from: encoder.encode(Derived(a: 1, b: 2)))
+        #expect((derived.a, derived.b) == (1, 2))
+
+        let leaf = try decoder.decode(Leaf.self, from: encoder.encode(Leaf(a: 1, b: 2, c: 3)))
+        #expect((leaf.a, leaf.b, leaf.c) == (1, 2, 3))
+
+        let superEncoded = try decoder.decode(
+            SuperEncodedForKey.self,
+            from: encoder.encode(SuperEncodedForKey(a: 1, b: 2))
+        )
+        #expect((superEncoded.a, superEncoded.b) == (1, 2))
+    }
+
+    /// Writes a nested keyed container, a nested unkeyed container,
+    /// and a super encoder's value in an unkeyed container.
+    struct UnkeyedNesting: Encodable {
+        enum CodingKeys: String, CodingKey {
+            case items, x
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            var items = container.nestedUnkeyedContainer(forKey: .items)
+            try items.encode(1)
+            var table = items.nestedContainer(keyedBy: CodingKeys.self)
+            try table.encode(2, forKey: .x)
+            var list = items.nestedUnkeyedContainer()
+            try list.encode(3)
+            try 4.encode(to: items.superEncoder())
+            // The super encoder writes at the index it had when it was created,
+            // even though its value is written after the next element.
+            let superEncoder = items.superEncoder()
+            try items.encode(6)
+            try Base(a: 5).encode(to: superEncoder)
+        }
+    }
+
+    @Test func unkeyedContainerNestingAndSuperEncoder() throws {
+        let tree = try expectSameStructure(UnkeyedNesting())
+        #expect(
+            tree
+                == .table([
+                    "items": .array([
+                        .integer(1),
+                        .table(["x": .integer(2)]),
+                        .array([.integer(3)]),
+                        .integer(4),
+                        .table(["a": .integer(5)]),
+                        .integer(6),
+                    ])
+                ])
+        )
+    }
 }
 
 // MARK: - Structure Comparison
