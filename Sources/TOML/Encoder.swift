@@ -208,7 +208,7 @@ public final class TOMLEncoder {
 
         try value.encode(to: encoder)
 
-        guard let value = encoder.value else {
+        guard let value = try encoder.encodedValue() else {
             throw TOMLEncodingError.invalidValue("No value encoded", codingPath: [])
         }
 
@@ -429,20 +429,63 @@ final class _TOMLEncoder: Encoder {
     var userInfo: [CodingUserInfoKey: Any]
     let options: EncodingOptions
 
-    var value: TOMLValue?
-    private var storage: TOMLEncodingStorage
+    /// The value that this encoder's containers write to,
+    /// or `nil` if nothing is encoded yet.
+    fileprivate var storage: EncodedValue?
 
-    init(codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any], options: EncodingOptions) {
+    /// The state shared by every encoder in one encoding operation.
+    private let context: EncodingContext
+
+    convenience init(codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any], options: EncodingOptions) {
+        self.init(codingPath: codingPath, userInfo: userInfo, options: options, context: EncodingContext())
+    }
+
+    private init(
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: EncodingOptions,
+        context: EncodingContext
+    ) {
         self.codingPath = codingPath
         self.userInfo = userInfo
         self.options = options
-        self.storage = TOMLEncodingStorage()
+        self.context = context
+    }
+
+    /// Returns a new encoder at the given coding path
+    /// that shares this encoder's options and state.
+    fileprivate func makeEncoder(codingPath: [any CodingKey]) -> _TOMLEncoder {
+        _TOMLEncoder(codingPath: codingPath, userInfo: userInfo, options: options, context: context)
+    }
+
+    /// The value that the encoder holds,
+    /// or `nil` if nothing is encoded.
+    ///
+    /// - Throws: The first error that a container recorded
+    ///   because it couldn't throw when the fault happened.
+    func encodedValue() throws -> TOMLValue? {
+        if let error = context.error {
+            throw error
+        }
+        return storage?.resolved()
+    }
+
+    /// Records an error to throw when encoding finishes,
+    /// for a fault in a method that can't throw.
+    ///
+    /// Only the first error is kept.
+    fileprivate func recordError(_ message: String, codingPath: [any CodingKey]) {
+        if context.error == nil {
+            context.error = .invalidValue(message, codingPath: codingPath)
+        }
     }
 
     func container<Key: CodingKey>(keyedBy type: Key.Type) -> KeyedEncodingContainer<Key> {
+        let table = tableStorage(at: &storage) ?? conflictingTable(at: codingPath)
         let container = TOMLKeyedEncodingContainer<Key>(
             encoder: self,
-            codingPath: codingPath
+            codingPath: codingPath,
+            table: table
         )
         return KeyedEncodingContainer(container)
     }
@@ -450,7 +493,8 @@ final class _TOMLEncoder: Encoder {
     func unkeyedContainer() -> any UnkeyedEncodingContainer {
         TOMLUnkeyedEncodingContainer(
             encoder: self,
-            codingPath: codingPath
+            codingPath: codingPath,
+            array: arrayStorage(at: &storage) ?? conflictingArray(at: codingPath)
         )
     }
 
@@ -462,7 +506,29 @@ final class _TOMLEncoder: Encoder {
     }
 
     func setValue(_ value: TOMLValue) {
-        self.value = value
+        storage = .value(value)
+    }
+
+    /// Records an error for a keyed container
+    /// that can't write at the given path,
+    /// and returns a table that isn't part of the output.
+    fileprivate func conflictingTable(at codingPath: [any CodingKey]) -> EncodedTable {
+        recordError(
+            "Unable to encode a keyed container where a value of another type is already encoded",
+            codingPath: codingPath
+        )
+        return EncodedTable()
+    }
+
+    /// Records an error for an unkeyed container
+    /// that can't write at the given path,
+    /// and returns an array that isn't part of the output.
+    fileprivate func conflictingArray(at codingPath: [any CodingKey]) -> EncodedArray {
+        recordError(
+            "Unable to encode an unkeyed container where a value of another type is already encoded",
+            codingPath: codingPath
+        )
+        return EncodedArray()
     }
 }
 
@@ -520,7 +586,9 @@ private extension _TOMLEncoder {
         }
     }
 
-    func box<T: Encodable>(_ value: T) throws -> TOMLValue {
+    /// Converts a value to a TOML value,
+    /// using a new encoder at the given coding path for most types.
+    func box<T: Encodable>(_ value: T, codingPath: [any CodingKey]) throws -> TOMLValue {
         if let date = value as? Date {
             return box(date)
         }
@@ -537,10 +605,10 @@ private extension _TOMLEncoder {
             return .string(url.absoluteString)
         }
 
-        let encoder = _TOMLEncoder(codingPath: codingPath, userInfo: userInfo, options: options)
+        let encoder = makeEncoder(codingPath: codingPath)
         try value.encode(to: encoder)
 
-        if let v = encoder.value {
+        if let v = try encoder.encodedValue() {
             return v
         }
 
@@ -593,8 +661,113 @@ private func encodeInteger<T: UnsignedInteger>(_ value: T, codingPath: [any Codi
 
 // MARK: - Encoding Storage
 
-private final class TOMLEncodingStorage {
-    var containers: [Any] = []
+/// The state shared by every encoder in one encoding operation.
+private final class EncodingContext {
+    /// The first error that a container recorded
+    /// in a method that can't throw.
+    var error: TOMLEncodingError?
+}
+
+/// A value that encoding can still change,
+/// because a container or super encoder writes to it.
+///
+/// Tables and arrays are references,
+/// so a nested container writes into its parent at its key or index.
+/// The encoder turns its storage into a ``TOMLValue`` when encoding finishes.
+private enum EncodedValue {
+    /// A finished value.
+    case value(TOMLValue)
+
+    /// A table that keyed containers write to.
+    case table(EncodedTable)
+
+    /// An array that unkeyed containers write to.
+    case array(EncodedArray)
+
+    /// The place for the value that a super encoder writes.
+    case encoder(_TOMLEncoder)
+
+    func resolved() -> TOMLValue {
+        switch self {
+        case .value(let value):
+            return value
+        case .table(let table):
+            return .table(table.entries.mapValues { $0.resolved() })
+        case .array(let array):
+            return .array(array.elements.map { $0.resolved() })
+        case .encoder(let encoder):
+            // Like `JSONEncoder`, a super encoder that encodes nothing writes an empty table.
+            return encoder.storage?.resolved() ?? .table([:])
+        }
+    }
+}
+
+private final class EncodedTable {
+    var entries: [String: EncodedValue]
+
+    init(entries: [String: EncodedValue] = [:]) {
+        self.entries = entries
+    }
+}
+
+private final class EncodedArray {
+    var elements: [EncodedValue]
+
+    init(elements: [EncodedValue] = []) {
+        self.elements = elements
+    }
+}
+
+/// Returns the table that a keyed container writes to at `value`,
+/// creating it if nothing is encoded there,
+/// or `nil` if a value of another type is encoded there.
+///
+/// Like `JSONEncoder`, a second keyed container at one place
+/// writes to the same table,
+/// and a keyed container adds to a table that a value encoded there.
+private func tableStorage(at value: inout EncodedValue?) -> EncodedTable? {
+    switch value {
+    case nil:
+        let table = EncodedTable()
+        value = .table(table)
+        return table
+    case .table(let table):
+        return table
+    case .value(.table(let entries)):
+        let table = EncodedTable(entries: entries.mapValues { .value($0) })
+        value = .table(table)
+        return table
+    case .encoder(let encoder):
+        return tableStorage(at: &encoder.storage)
+    case .value, .array:
+        return nil
+    }
+}
+
+/// Returns the array that an unkeyed container writes to at `value`,
+/// creating it if nothing is encoded there,
+/// or `nil` if a value of another type is encoded there.
+///
+/// Like `JSONEncoder`, a second unkeyed container at one place
+/// appends to the same array,
+/// and an unkeyed container appends to an array that a value encoded there.
+private func arrayStorage(at value: inout EncodedValue?) -> EncodedArray? {
+    switch value {
+    case nil:
+        let array = EncodedArray()
+        value = .array(array)
+        return array
+    case .array(let array):
+        return array
+    case .value(.array(let elements)):
+        let array = EncodedArray(elements: elements.map { .value($0) })
+        value = .array(array)
+        return array
+    case .encoder(let encoder):
+        return arrayStorage(at: &encoder.storage)
+    case .value, .table:
+        return nil
+    }
 }
 
 // MARK: - Keyed Encoding Container
@@ -603,19 +776,19 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     var codingPath: [any CodingKey]
     let encoder: _TOMLEncoder
 
-    private var storage: [String: TOMLValue] = [:]
+    private let table: EncodedTable
 
-    init(encoder: _TOMLEncoder, codingPath: [any CodingKey]) {
+    init(encoder: _TOMLEncoder, codingPath: [any CodingKey], table: EncodedTable) {
         self.encoder = encoder
         self.codingPath = codingPath
-        // Initialize with empty table so empty containers are valid
-        encoder.setValue(.table([:]))
+        self.table = table
     }
 
-    private mutating func set(_ value: TOMLValue, forKey key: Key) {
-        let keyString = encoder.convertKey(key)
-        storage[keyString] = value
-        encoder.setValue(.table(storage))
+    /// Writes a value at the given key.
+    ///
+    /// Like `JSONEncoder`, the last value written at a key replaces the others.
+    private func set(_ value: TOMLValue, forKey key: Key) {
+        table.entries[encoder.convertKey(key)] = .value(value)
     }
 
     mutating func encodeNil(forKey key: Key) throws {
@@ -678,7 +851,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     }
 
     mutating func encode<T: Encodable>(_ value: T, forKey key: Key) throws {
-        let boxed = try encoder.box(value)
+        let boxed = try encoder.box(value, codingPath: codingPath)
         set(boxed, forKey: key)
     }
 
@@ -686,29 +859,46 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
         keyedBy keyType: NestedKey.Type,
         forKey key: Key
     ) -> KeyedEncodingContainer<NestedKey> {
-        let nestedEncoder = _TOMLEncoder(
-            codingPath: codingPath + [key],
-            userInfo: encoder.userInfo,
-            options: encoder.options
+        let nestedPath = codingPath + [key]
+        let nestedTable =
+            tableStorage(at: &table.entries[encoder.convertKey(key)])
+            ?? encoder.conflictingTable(at: nestedPath)
+        let container = TOMLKeyedEncodingContainer<NestedKey>(
+            encoder: encoder,
+            codingPath: nestedPath,
+            table: nestedTable
         )
-        return nestedEncoder.container(keyedBy: keyType)
+        return KeyedEncodingContainer(container)
     }
 
     mutating func nestedUnkeyedContainer(forKey key: Key) -> any UnkeyedEncodingContainer {
-        let nestedEncoder = _TOMLEncoder(
-            codingPath: codingPath + [key],
-            userInfo: encoder.userInfo,
-            options: encoder.options
+        let nestedPath = codingPath + [key]
+        let nestedArray =
+            arrayStorage(at: &table.entries[encoder.convertKey(key)])
+            ?? encoder.conflictingArray(at: nestedPath)
+        return TOMLUnkeyedEncodingContainer(
+            encoder: encoder,
+            codingPath: nestedPath,
+            array: nestedArray
         )
-        return nestedEncoder.unkeyedContainer()
     }
 
     mutating func superEncoder() -> any Encoder {
-        _TOMLEncoder(codingPath: codingPath, userInfo: encoder.userInfo, options: encoder.options)
+        superEncoder(forCodingKey: TOMLCodingKey(stringValue: "super"))
     }
 
     mutating func superEncoder(forKey key: Key) -> any Encoder {
-        _TOMLEncoder(codingPath: codingPath + [key], userInfo: encoder.userInfo, options: encoder.options)
+        superEncoder(forCodingKey: key)
+    }
+
+    /// Returns an encoder that writes its value at the given key,
+    /// even after other values are written to this container.
+    ///
+    /// Like `JSONEncoder`, the value replaces any value already at the key.
+    private func superEncoder(forCodingKey key: any CodingKey) -> any Encoder {
+        let superEncoder = encoder.makeEncoder(codingPath: codingPath + [key])
+        table.entries[encoder.convertKey(key)] = .encoder(superEncoder)
+        return superEncoder
     }
 }
 
@@ -718,20 +908,18 @@ private struct TOMLUnkeyedEncodingContainer: UnkeyedEncodingContainer {
     var codingPath: [any CodingKey]
     let encoder: _TOMLEncoder
 
-    private var storage: [TOMLValue] = []
+    private let array: EncodedArray
 
-    var count: Int { storage.count }
+    var count: Int { array.elements.count }
 
-    init(encoder: _TOMLEncoder, codingPath: [any CodingKey]) {
+    init(encoder: _TOMLEncoder, codingPath: [any CodingKey], array: EncodedArray) {
         self.encoder = encoder
         self.codingPath = codingPath
-        // Initialize with empty array so empty containers are valid
-        encoder.setValue(.array([]))
+        self.array = array
     }
 
-    private mutating func append(_ value: TOMLValue) {
-        storage.append(value)
-        encoder.setValue(.array(storage))
+    private func append(_ value: TOMLValue) {
+        array.elements.append(.value(value))
     }
 
     mutating func encodeNil() throws {
@@ -794,36 +982,41 @@ private struct TOMLUnkeyedEncodingContainer: UnkeyedEncodingContainer {
     }
 
     mutating func encode<T: Encodable>(_ value: T) throws {
-        let boxed = try encoder.box(value)
+        let boxed = try encoder.box(value, codingPath: codingPath)
         append(boxed)
     }
 
     mutating func nestedContainer<NestedKey: CodingKey>(
         keyedBy keyType: NestedKey.Type
     ) -> KeyedEncodingContainer<NestedKey> {
-        let nestedEncoder = _TOMLEncoder(
-            codingPath: codingPath + [TOMLCodingKey(index: count)],
-            userInfo: encoder.userInfo,
-            options: encoder.options
+        let nestedPath = codingPath + [TOMLCodingKey(index: count)]
+        let nestedTable = EncodedTable()
+        array.elements.append(.table(nestedTable))
+        let container = TOMLKeyedEncodingContainer<NestedKey>(
+            encoder: encoder,
+            codingPath: nestedPath,
+            table: nestedTable
         )
-        return nestedEncoder.container(keyedBy: keyType)
+        return KeyedEncodingContainer(container)
     }
 
     mutating func nestedUnkeyedContainer() -> any UnkeyedEncodingContainer {
-        let nestedEncoder = _TOMLEncoder(
-            codingPath: codingPath + [TOMLCodingKey(index: count)],
-            userInfo: encoder.userInfo,
-            options: encoder.options
+        let nestedPath = codingPath + [TOMLCodingKey(index: count)]
+        let nestedArray = EncodedArray()
+        array.elements.append(.array(nestedArray))
+        return TOMLUnkeyedEncodingContainer(
+            encoder: encoder,
+            codingPath: nestedPath,
+            array: nestedArray
         )
-        return nestedEncoder.unkeyedContainer()
     }
 
+    /// Returns an encoder that writes its value at the next index,
+    /// even after other values are appended to this container.
     mutating func superEncoder() -> any Encoder {
-        _TOMLEncoder(
-            codingPath: codingPath + [TOMLCodingKey(index: count)],
-            userInfo: encoder.userInfo,
-            options: encoder.options
-        )
+        let superEncoder = encoder.makeEncoder(codingPath: codingPath + [TOMLCodingKey(index: count)])
+        array.elements.append(.encoder(superEncoder))
+        return superEncoder
     }
 }
 
@@ -898,7 +1091,7 @@ private struct TOMLSingleValueEncodingContainer: SingleValueEncodingContainer {
     }
 
     mutating func encode<T: Encodable>(_ value: T) throws {
-        let boxed = try encoder.box(value)
+        let boxed = try encoder.box(value, codingPath: codingPath)
         encoder.setValue(boxed)
     }
 }
