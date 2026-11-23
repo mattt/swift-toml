@@ -541,6 +541,35 @@ struct TOMLDecoderTests {
         #expect(config.time.second == 45)
     }
 
+    @Test func decodeLeapSecondOffsetDateTimeAsFollowingSecond() throws {
+        let toml = """
+            date = 2016-12-31T23:59:60Z
+            """
+
+        struct Config: Codable {
+            let date: Date
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+
+        // 2017-01-01T00:00:00Z
+        #expect(config.date == Date(timeIntervalSince1970: 1_483_228_800))
+    }
+
+    @Test func decodeLeapSecondLocalTime() throws {
+        let toml = """
+            time = 23:59:60
+            """
+
+        struct Config: Codable {
+            let time: LocalTime
+        }
+
+        let config = try TOMLDecoder().decode(Config.self, from: toml)
+
+        #expect(config.time == LocalTime(hour: 23, minute: 59, second: 60))
+    }
+
     @Test func decodeLocalDateTimeAsDate() throws {
         let toml = """
             datetime = 2024-06-15T10:30:00

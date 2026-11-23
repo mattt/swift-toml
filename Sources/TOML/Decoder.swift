@@ -34,6 +34,11 @@ import Foundation
 /// decoder.dateDecodingStrategy = .iso8601
 /// ```
 ///
+/// `Date` can't represent a leap second,
+/// so an offset date-time with second 60, such as `2016-12-31T23:59:60Z`,
+/// decodes as the following second, `2017-01-01T00:00:00Z`.
+/// ``LocalTime`` and ``LocalDateTime`` keep second 60.
+///
 /// ## Key Decoding
 ///
 /// Use ``KeyDecodingStrategy`` to automatically convert between naming conventions:
