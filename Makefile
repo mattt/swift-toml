@@ -22,7 +22,7 @@ test-unit:
 
 # Run integration tests
 test-integration:
-	cd Tests/Integration && make test
+	cd Tests/Integration && $(MAKE) test SWIFT="$(SWIFT)"
 
 # Check for toml++ updates without downloading
 check:
