@@ -9,6 +9,12 @@ permissions:
   contents: read
   issues: write
 
+# Run one check at a time, so that two runs cannot both find no issue
+# and create duplicates. A later run waits for the current one.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   check:
     name: Check for toml++ Updates
