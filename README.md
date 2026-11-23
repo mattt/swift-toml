@@ -175,6 +175,13 @@ let decoder = TOMLDecoder()
 let event = try decoder.decode(Event.self, from: toml)
 ```
 
+`Date` can't represent a leap second,
+so an offset date-time with second 60, such as `2016-12-31T23:59:60Z`,
+decodes as the following second.
+`LocalTime` and `LocalDateTime` keep second 60.
+The parser accepts second 60 at minute 59
+without checking that a leap second occurred.
+
 ### Key Decoding Strategy
 
 Automatically convert snake_case keys to camelCase:
@@ -229,10 +236,12 @@ For trusted input where you need no restrictions:
 decoder.limits = .unlimited
 ```
 
-The parser rejects documents nested more than about 128 levels deep
-before these limits apply, so such documents throw `TOMLDecodingError.invalidSyntax`
+The decoder checks `maxInputSize` before parsing.
+For input within that size, the parser rejects documents nested more than about 128 levels deep
+before the other limits apply, so such documents throw `TOMLDecodingError.invalidSyntax`
 whatever the limits are.
-With the default limits, version 2.1.1 and earlier threw `invalidData` for most of these documents.
+For example, with the default limits, 129 nested empty arrays now throw `invalidSyntax`;
+version 2.1.1 and earlier threw `invalidData`.
 
 ## Development
 

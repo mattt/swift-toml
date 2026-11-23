@@ -38,6 +38,8 @@ import Foundation
 /// so an offset date-time with second 60, such as `2016-12-31T23:59:60Z`,
 /// decodes as the following second, `2017-01-01T00:00:00Z`.
 /// ``LocalTime`` and ``LocalDateTime`` keep second 60.
+/// The parser accepts second 60 at minute 59
+/// without checking that a leap second occurred.
 ///
 /// ## Key Decoding
 ///
@@ -105,10 +107,13 @@ public final class TOMLDecoder {
         /// Maximum nesting depth for tables and arrays.
         /// The root table has depth 0.
         ///
-        /// - Note: The parser rejects documents nested more than about 128 levels deep
+        /// - Note: For input within ``maxInputSize``,
+        ///   the parser rejects documents nested more than about 128 levels deep
         ///   before this limit applies, so they throw
         ///   ``TOMLDecodingError/invalidSyntax(line:column:message:)``
         ///   whatever the value of this property.
+        ///   For example, 129 nested empty arrays throw `invalidSyntax`,
+        ///   even with the default limits.
         public var maxDepth: Int
 
         /// Maximum number of keys in a single table.
