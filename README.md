@@ -182,6 +182,22 @@ decodes as the following second.
 The parser accepts second 60 at minute 59
 without checking that a leap second occurred.
 
+### Documents of Unknown Shape
+
+Decode a document, or a part of one, as `TOMLValue`
+to read it as written, without the date or key strategies:
+
+```swift
+struct Package: Codable {
+    var name: String
+    var metadata: [String: TOMLValue]  // Any table
+}
+
+let document = try TOMLDecoder().decode(TOMLValue.self, from: toml)
+```
+
+`TOMLEncoder` writes a `TOMLValue` as it is.
+
 ### Key Decoding Strategy
 
 Automatically convert snake_case keys to camelCase:
