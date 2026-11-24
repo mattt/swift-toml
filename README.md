@@ -236,6 +236,12 @@ let data = try encoder.encode(myValue)
 
 By default, `URL` values use their own `Encodable` conformance, which writes a table with a `relative` key. Set `urlEncodingStrategy` to `.absoluteString` to write a string, such as `url = "https://example.com/"`. The decoder reads both forms.
 
+As with `JSONEncoder` and `JSONDecoder`,
+the key strategies don't change the keys of a dictionary with `String` keys,
+such as `[String: Int]`,
+but they convert the keys of the values in the dictionary.
+Version 2.2.2 and earlier of `TOMLEncoder` converted the keys of such a dictionary.
+
 ### Decoding Limits
 
 Protect against malicious or malformed input:

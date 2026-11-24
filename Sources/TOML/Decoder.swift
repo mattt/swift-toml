@@ -723,12 +723,6 @@ final class _TOMLDecoder: Decoder {
 
 // MARK: - Helpers
 
-/// A dictionary with `String` keys,
-/// whose keys the decoder keeps instead of applying the key decoding strategy.
-private protocol StringKeyedDictionary {}
-
-extension Dictionary: StringKeyedDictionary where Key == String {}
-
 private func valueTypeName(_ value: TOMLValue) -> String {
     switch value {
     case .string: return "string"

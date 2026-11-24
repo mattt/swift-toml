@@ -571,22 +571,92 @@ struct EncoderTests {
             let tableByName: [String: Int]
         }
 
-        let encoder = TOMLEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
         let config = Config(
             serverURL: Inner(innerID: 1),
             itemList: [Inner(innerID: 2)],
             tableByName: ["myURLValue": 3]
         )
-        let value = try TOMLDecoder().decode(EncodedTree.self, from: encoder.encode(config))
+        let value = try expectSameStructure(config, snakeCaseKeys: true)
 
-        // Unlike `JSONEncoder`, `TOMLEncoder` also converts the keys of a dictionary with `String` keys.
+        // Like `JSONEncoder`, `TOMLEncoder` doesn't convert the keys of a dictionary with `String` keys.
         #expect(
             value
                 == .table([
                     "server_url": .table(["inner_id": .integer(1)]),
                     "item_list": .array([.table(["inner_id": .integer(2)])]),
-                    "table_by_name": .table(["my_url_value": .integer(3)]),
+                    "table_by_name": .table(["myURLValue": .integer(3)]),
+                ])
+        )
+    }
+
+    /// A table of camelCase keys, for values in dictionaries.
+    struct Service: Codable, Equatable {
+        let displayName: String
+        let extraHeaders: [String: String]
+    }
+
+    /// Like `JSONEncoder`, the strategy keeps the keys of a dictionary property
+    /// and converts the keys of the tables in it.
+    @Test func convertToSnakeCaseDictionaryProperty() throws {
+        struct Config: Encodable {
+            let envVars: [String: String]
+            let serviceByName: [String: Service]
+        }
+
+        let config = Config(
+            envVars: ["MY_VAR": "1", "otherVar": "2"],
+            serviceByName: ["webServer": Service(displayName: "Web", extraHeaders: ["X-Request-ID": "a"])]
+        )
+        #expect(
+            try expectSameStructure(config, snakeCaseKeys: true)
+                == .table([
+                    "env_vars": .table(["MY_VAR": .string("1"), "otherVar": .string("2")]),
+                    "service_by_name": .table([
+                        "webServer": .table([
+                            "display_name": .string("Web"),
+                            "extra_headers": .table(["X-Request-ID": .string("a")]),
+                        ])
+                    ]),
+                ])
+        )
+    }
+
+    /// Like `JSONEncoder`, the strategy keeps the keys of a top-level dictionary.
+    @Test func convertToSnakeCaseTopLevelDictionary() throws {
+        #expect(
+            try expectSameStructure(["myURLValue": 1, "userID": 2], snakeCaseKeys: true)
+                == .table(["myURLValue": .integer(1), "userID": .integer(2)])
+        )
+        #expect(
+            try expectSameStructure(
+                ["webServer": Service(displayName: "Web", extraHeaders: [:])],
+                snakeCaseKeys: true
+            ) == .table(["webServer": .table(["display_name": .string("Web"), "extra_headers": .table([:])])])
+        )
+    }
+
+    /// Like `JSONEncoder`, the strategy keeps the keys of each dictionary in a nested dictionary.
+    @Test func convertToSnakeCaseNestedDictionary() throws {
+        struct Config: Encodable {
+            let servicesByRegion: [String: [String: Service]]
+        }
+
+        let config = Config(
+            servicesByRegion: [
+                "usEast": ["webServer": Service(displayName: "Web", extraHeaders: ["X-Request-ID": "a"])]
+            ]
+        )
+        #expect(
+            try expectSameStructure(config, snakeCaseKeys: true)
+                == .table([
+                    "services_by_region": .table([
+                        "usEast": .table([
+                            "webServer": .table([
+                                "display_name": .string("Web"),
+                                "extra_headers": .table(["X-Request-ID": .string("a")]),
+                            ])
+                        ])
+                    ])
                 ])
         )
     }

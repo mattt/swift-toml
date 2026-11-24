@@ -853,6 +853,112 @@ struct TOMLDecoderTests {
         #expect(topLevel == ["MY_VAR": "1"])
     }
 
+    /// A table of camelCase keys, for values in dictionaries.
+    struct Service: Decodable, Equatable {
+        let displayName: String
+        let extraHeaders: [String: String]
+    }
+
+    /// Decodes a value from TOML and from JSON with `.convertFromSnakeCase`,
+    /// expects both results to be equal, and returns the result from TOML.
+    private func decodeConvertingFromSnakeCase<T: Decodable & Equatable>(
+        _ type: T.Type,
+        toml: String,
+        json: String,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws -> T {
+        let tomlDecoder = TOMLDecoder()
+        tomlDecoder.keyDecodingStrategy = .convertFromSnakeCase
+        let jsonDecoder = JSONDecoder()
+        jsonDecoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        let fromTOML = try tomlDecoder.decode(type, from: toml)
+        let fromJSON = try jsonDecoder.decode(type, from: Data(json.utf8))
+        #expect(fromTOML == fromJSON, sourceLocation: sourceLocation)
+        return fromTOML
+    }
+
+    /// Like `JSONDecoder`, the strategy keeps the keys of a dictionary property
+    /// and converts the keys of the tables in it.
+    @Test func decodeConvertFromSnakeCaseDictionaryPropertyMatchesJSONDecoder() throws {
+        struct Config: Decodable, Equatable {
+            let envVars: [String: String]
+            let serviceByName: [String: Service]
+        }
+
+        let config = try decodeConvertingFromSnakeCase(
+            Config.self,
+            toml: """
+                [env_vars]
+                MY_VAR = "1"
+                other_var = "2"
+
+                [service_by_name.web_server]
+                display_name = "Web"
+                extra_headers = { X_REQUEST_ID = "a" }
+                """,
+            json: """
+                {
+                  "env_vars": {"MY_VAR": "1", "other_var": "2"},
+                  "service_by_name": {
+                    "web_server": {"display_name": "Web", "extra_headers": {"X_REQUEST_ID": "a"}}
+                  }
+                }
+                """
+        )
+        #expect(config.envVars == ["MY_VAR": "1", "other_var": "2"])
+        #expect(
+            config.serviceByName == ["web_server": Service(displayName: "Web", extraHeaders: ["X_REQUEST_ID": "a"])]
+        )
+    }
+
+    /// Like `JSONDecoder`, the strategy keeps the keys of a top-level dictionary.
+    @Test func decodeConvertFromSnakeCaseTopLevelDictionaryMatchesJSONDecoder() throws {
+        let values = try decodeConvertingFromSnakeCase(
+            [String: Int].self,
+            toml: "my_value = 1\nMY_VAR = 2",
+            json: #"{"my_value": 1, "MY_VAR": 2}"#
+        )
+        #expect(values == ["my_value": 1, "MY_VAR": 2])
+
+        let services = try decodeConvertingFromSnakeCase(
+            [String: Service].self,
+            toml: "[web_server]\ndisplay_name = \"Web\"\nextra_headers = {}",
+            json: #"{"web_server": {"display_name": "Web", "extra_headers": {}}}"#
+        )
+        #expect(services == ["web_server": Service(displayName: "Web", extraHeaders: [:])])
+    }
+
+    /// Like `JSONDecoder`, the strategy keeps the keys of each dictionary in a nested dictionary.
+    @Test func decodeConvertFromSnakeCaseNestedDictionaryMatchesJSONDecoder() throws {
+        struct Config: Decodable, Equatable {
+            let servicesByRegion: [String: [String: Service]]
+        }
+
+        let config = try decodeConvertingFromSnakeCase(
+            Config.self,
+            toml: """
+                [services_by_region.us_east.web_server]
+                display_name = "Web"
+                extra_headers = { X_REQUEST_ID = "a" }
+                """,
+            json: """
+                {
+                  "services_by_region": {
+                    "us_east": {
+                      "web_server": {"display_name": "Web", "extra_headers": {"X_REQUEST_ID": "a"}}
+                    }
+                  }
+                }
+                """
+        )
+        #expect(
+            config.servicesByRegion == [
+                "us_east": ["web_server": Service(displayName: "Web", extraHeaders: ["X_REQUEST_ID": "a"])]
+            ]
+        )
+    }
+
     @Test func decodeUseDefaultKeys() throws {
         let toml = """
             userName = "john"

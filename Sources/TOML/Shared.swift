@@ -25,3 +25,11 @@ struct TOMLCodingKey: CodingKey {
 protocol DeprecatedCaseDescribing {
     var deprecatedCaseDescription: String { get }
 }
+
+/// A dictionary with `String` keys,
+/// whose keys the encoder and decoder keep instead of applying the key strategy.
+///
+/// `JSONEncoder` and `JSONDecoder` keep these keys too.
+protocol StringKeyedDictionary {}
+
+extension Dictionary: StringKeyedDictionary where Key == String {}

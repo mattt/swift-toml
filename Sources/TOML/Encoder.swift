@@ -126,11 +126,13 @@ public final class TOMLEncoder {
         /// give it an explicit `CodingKeys` raw value that each strategy converts to the other,
         /// such as `case userID = "userId"`.
         ///
-        /// Unlike `JSONEncoder`, this strategy also converts the keys
-        /// of a dictionary with `String` keys, such as `[String: Int]`.
-        /// ``TOMLDecoder`` doesn't convert those keys back,
-        /// so they don't round-trip with
+        /// As with `JSONEncoder`, this strategy doesn't change the keys
+        /// of a dictionary with `String` keys, such as `[String: Int]`,
+        /// but it converts the keys of the values in the dictionary.
+        /// ``TOMLDecoder`` doesn't change those dictionary keys either,
+        /// so they round-trip with
         /// ``TOMLDecoder/KeyDecodingStrategy/convertFromSnakeCase``.
+        /// Version 2.2.2 and earlier converted the keys of such a dictionary.
         case convertToSnakeCase
     }
 
@@ -264,7 +266,8 @@ public final class TOMLEncoder {
                 keyEncodingStrategy: keyEncodingStrategy,
                 urlEncodingStrategy: urlEncodingStrategy,
                 outputFormatting: outputFormatting
-            )
+            ),
+            keepsTableKeys: value is any StringKeyedDictionary
         )
 
         try value.encode(to: encoder)
@@ -567,15 +570,28 @@ final class _TOMLEncoder: Encoder {
     /// when it's released.
     private let superEncoderTarget: (table: EncodedTable, key: String)?
 
+    /// Whether a keyed container for this encoder writes its keys
+    /// without applying the key encoding strategy.
+    ///
+    /// Like `JSONEncoder`, the encoder keeps the keys of a dictionary with `String` keys,
+    /// but it applies the strategy to the tables inside the dictionary.
+    private let keepsTableKeys: Bool
+
     /// Creates an encoder with its own error context,
     /// for the top-level value or a value that a container boxes.
-    convenience init(codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any], options: EncodingOptions) {
+    convenience init(
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: EncodingOptions,
+        keepsTableKeys: Bool = false
+    ) {
         self.init(
             codingPath: codingPath,
             userInfo: userInfo,
             options: options,
             context: EncodingContext(),
-            superEncoderTarget: nil
+            superEncoderTarget: nil,
+            keepsTableKeys: keepsTableKeys
         )
     }
 
@@ -584,13 +600,15 @@ final class _TOMLEncoder: Encoder {
         userInfo: [CodingUserInfoKey: Any],
         options: EncodingOptions,
         context: EncodingContext,
-        superEncoderTarget: (table: EncodedTable, key: String)?
+        superEncoderTarget: (table: EncodedTable, key: String)?,
+        keepsTableKeys: Bool
     ) {
         self.codingPath = codingPath
         self.userInfo = userInfo
         self.options = options
         self.context = context
         self.superEncoderTarget = superEncoderTarget
+        self.keepsTableKeys = keepsTableKeys
     }
 
     deinit {
@@ -615,7 +633,8 @@ final class _TOMLEncoder: Encoder {
             userInfo: userInfo,
             options: options,
             context: context,
-            superEncoderTarget: target
+            superEncoderTarget: target,
+            keepsTableKeys: false
         )
     }
 
@@ -648,7 +667,8 @@ final class _TOMLEncoder: Encoder {
         let container = TOMLKeyedEncodingContainer<Key>(
             encoder: self,
             codingPath: codingPath,
-            table: table
+            table: table,
+            convertsKeys: !keepsTableKeys
         )
         return KeyedEncodingContainer(container)
     }
@@ -770,7 +790,12 @@ private extension _TOMLEncoder {
 
         // The value gets its own error context,
         // so an error that the caller catches doesn't reach later values.
-        let encoder = _TOMLEncoder(codingPath: codingPath, userInfo: userInfo, options: options)
+        let encoder = _TOMLEncoder(
+            codingPath: codingPath,
+            userInfo: userInfo,
+            options: options,
+            keepsTableKeys: value is any StringKeyedDictionary
+        )
         try value.encode(to: encoder)
 
         if let v = try encoder.encodedValue() {
@@ -953,17 +978,26 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
 
     private let table: EncodedTable
 
-    init(encoder: _TOMLEncoder, codingPath: [any CodingKey], table: EncodedTable) {
+    /// Whether the container applies the key encoding strategy to its keys.
+    private let convertsKeys: Bool
+
+    init(encoder: _TOMLEncoder, codingPath: [any CodingKey], table: EncodedTable, convertsKeys: Bool = true) {
         self.encoder = encoder
         self.codingPath = codingPath
         self.table = table
+        self.convertsKeys = convertsKeys
+    }
+
+    /// Returns the key that the container writes in its table for a coding key.
+    private func convertKey(_ key: any CodingKey) -> String {
+        convertsKeys ? encoder.convertKey(key) : key.stringValue
     }
 
     /// Writes a value at the given key.
     ///
     /// Like `JSONEncoder`, the last value written at a key replaces the others.
     private func set(_ value: TOMLValue, forKey key: Key) {
-        table.entries[encoder.convertKey(key)] = .value(value)
+        table.entries[convertKey(key)] = .value(value)
     }
 
     mutating func encodeNil(forKey key: Key) throws {
@@ -1036,7 +1070,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     ) -> KeyedEncodingContainer<NestedKey> {
         let nestedPath = codingPath + [key]
         let nestedTable =
-            tableStorage(at: &table.entries[encoder.convertKey(key)])
+            tableStorage(at: &table.entries[convertKey(key)])
             ?? encoder.conflictingTable(at: nestedPath)
         let container = TOMLKeyedEncodingContainer<NestedKey>(
             encoder: encoder,
@@ -1049,7 +1083,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     mutating func nestedUnkeyedContainer(forKey key: Key) -> any UnkeyedEncodingContainer {
         let nestedPath = codingPath + [key]
         let nestedArray =
-            arrayStorage(at: &table.entries[encoder.convertKey(key)])
+            arrayStorage(at: &table.entries[convertKey(key)])
             ?? encoder.conflictingArray(at: nestedPath)
         return TOMLUnkeyedEncodingContainer(
             encoder: encoder,
@@ -1074,7 +1108,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     /// A value that this container writes at the key after that release
     /// replaces the super encoder's value.
     private func superEncoder(forCodingKey key: any CodingKey) -> any Encoder {
-        let convertedKey = encoder.convertKey(key)
+        let convertedKey = convertKey(key)
         let superEncoder = encoder.makeSuperEncoder(
             codingPath: codingPath + [key],
             target: (table, convertedKey)
