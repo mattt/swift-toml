@@ -530,15 +530,30 @@ struct EncoderContainerTests {
         return (tomlDecoder, jsonDecoder)
     }
 
-    /// Reads an optional integer from the single-value container of a super decoder.
+    /// An integer whose initializer returns 0 for a missing value.
+    struct DefaultingCount: Decodable, Equatable {
+        let value: Int
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            value = container.decodeNil() ? 0 : try container.decode(Int.self)
+        }
+    }
+
+    /// Reads optional values and a value with a custom initializer
+    /// from the single-value container of a super decoder.
     struct OptionalSuperValue: Decodable {
         let isNil: Bool
         let value: Int?
+        let date: Date?
+        let count: DefaultingCount
 
         init(from decoder: any Decoder) throws {
             let superContainer = try SuperDecoderKey.superDecoder(of: decoder).singleValueContainer()
             isNil = superContainer.decodeNil()
             value = try superContainer.decode(Int?.self)
+            date = superContainer.decodeNil() ? try superContainer.decode(Date?.self) : nil
+            count = try superContainer.decode(DefaultingCount.self)
         }
     }
 
@@ -550,6 +565,8 @@ struct EncoderContainerTests {
         let jsonMissing = try jsonDecoder.decode(OptionalSuperValue.self, from: Data("{}".utf8))
         #expect(tomlMissing.isNil && jsonMissing.isNil)
         #expect(tomlMissing.value == nil && jsonMissing.value == nil)
+        #expect(tomlMissing.date == nil && jsonMissing.date == nil)
+        #expect(tomlMissing.count.value == 0 && jsonMissing.count.value == 0)
 
         let tomlPresent = try tomlDecoder.decode(OptionalSuperValue.self, from: "\(key.rawValue) = 3")
         let jsonPresent = try jsonDecoder.decode(
@@ -558,6 +575,7 @@ struct EncoderContainerTests {
         )
         #expect(!tomlPresent.isNil && !jsonPresent.isNil)
         #expect(tomlPresent.value == 3 && jsonPresent.value == 3)
+        #expect(tomlPresent.count.value == 3 && jsonPresent.count.value == 3)
     }
 
     /// Gets a keyed or unkeyed container from a super decoder.
@@ -607,6 +625,14 @@ struct EncoderContainerTests {
             case "Float": _ = try value.decode(Float.self)
             case "Double": _ = try value.decode(Double.self)
             case "Bool": _ = try value.decode(Bool.self)
+            case "Date": _ = try value.decode(Date.self)
+            case "URL": _ = try value.decode(URL.self)
+            case "Data": _ = try value.decode(Data.self)
+            case "Decimal": _ = try value.decode(Decimal.self)
+            case "LocalDateTime": _ = try value.decode(LocalDateTime.self)
+            case "LocalDate": _ = try value.decode(LocalDate.self)
+            case "LocalTime": _ = try value.decode(LocalTime.self)
+            case "TOMLValue": _ = try value.decode(TOMLValue.self)
             default: _ = try value.decode(String.self)
             }
         }
@@ -624,12 +650,14 @@ struct EncoderContainerTests {
         }
     }
 
-    /// For a missing key, the error names the requested type, as `JSONDecoder`'s does.
+    /// For a missing key, the error names the requested type and the key,
+    /// as `JSONDecoder`'s does for the types that it decodes itself.
     @Test(
         arguments: SuperDecoderKey.allCases,
         [
             "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Float",
-            "Double", "Bool", "String",
+            "Double", "Bool", "String", "Date", "URL", "Data", "Decimal", "LocalDateTime", "LocalDate", "LocalTime",
+            "TOMLValue",
         ]
     )
     func superDecoderMissingValueNamesRequestedType(key: SuperDecoderKey, typeName: String) {
@@ -637,9 +665,18 @@ struct EncoderContainerTests {
 
         let tomlError = valueNotFound { _ = try tomlDecoder.decode(MissingSuperValue.self, from: "") }
         let jsonError = valueNotFound { _ = try jsonDecoder.decode(MissingSuperValue.self, from: Data("{}".utf8)) }
-        #expect(tomlError == "\(typeName) at \(key.rawValue)")
-        // `JSONDecoder` throws `typeMismatch` for a `Bool` that's missing.
-        if typeName != "Bool" {
+        // `Decimal` is named `NSDecimal` on Apple platforms.
+        let typeDescription = typeName == "Decimal" ? "\(Decimal.self)" : typeName
+        #expect(tomlError == "\(typeDescription) at \(key.rawValue)")
+        switch typeName {
+        case "Bool", "TOMLValue":
+            // `JSONDecoder` throws `typeMismatch` for these types when they're missing.
+            break
+        case "LocalDateTime", "LocalDate", "LocalTime":
+            // `JSONDecoder` decodes these types with their keyed containers,
+            // so the error names `[String: Any]`.
+            #expect(jsonError == "Dictionary<String, Any> at \(key.rawValue)")
+        default:
             #expect(tomlError == jsonError)
         }
     }

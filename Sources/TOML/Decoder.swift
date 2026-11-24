@@ -606,8 +606,13 @@ final class _TOMLDecoder: Decoder {
     /// The value to decode,
     /// or `nil` for the value of a `super` key that a table doesn't have.
     ///
-    /// Like `JSONDecoder` for a null value, the decoder has no containers for a missing value,
-    /// and its single-value container decodes only `nil`.
+    /// Like `JSONDecoder` for a null value,
+    /// the decoder has no keyed or unkeyed container for a missing value.
+    /// From its single-value container, `decodeNil()` returns `true`,
+    /// an optional type decodes `nil`,
+    /// and a type such as `Int`, `String`, `Date`, `URL`, or ``LocalDate``
+    /// throws `DecodingError.valueNotFound` that names the type.
+    /// A custom `init(from:)` decides what to do with a missing value.
     let value: TOMLValue?
     var codingPath: [any CodingKey]
     var userInfo: [CodingUserInfoKey: Any]
@@ -1065,8 +1070,12 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
     /// Like `JSONDecoder`, this reads the key that `superEncoder()` writes,
     /// and it doesn't throw if the table doesn't have the key.
     /// The decoder for a missing key throws `DecodingError.valueNotFound`
-    /// for a keyed or unkeyed container,
-    /// and its single-value container decodes only `nil`.
+    /// for a keyed or unkeyed container.
+    /// From its single-value container, `decodeNil()` returns `true`,
+    /// an optional type decodes `nil`,
+    /// and a type such as `Int`, `String`, `Date`, `URL`, or ``LocalDate``
+    /// throws `DecodingError.valueNotFound` that names the type.
+    /// A custom `init(from:)` decides what to do with a missing value.
     func superDecoder() throws -> any Decoder {
         superDecoder(forCodingKey: TOMLCodingKey(stringValue: "super"))
     }
@@ -1341,18 +1350,30 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
         value == nil
     }
 
+    /// Returns whether the container decodes values of the given type
+    /// without the type's own initializer when the value is missing,
+    /// as `JSONDecoder` does.
+    private static func decodesDirectly<T>(_ type: T.Type) -> Bool {
+        type == Date.self || type == URL.self || type == Data.self || type == Decimal.self
+            || type == LocalDateTime.self || type == LocalDate.self || type == LocalTime.self
+    }
+
     /// Returns the value, or throws if the value is missing.
     private func requireValue<T>(_ type: T.Type) throws -> TOMLValue {
         guard let value else {
-            throw DecodingError.valueNotFound(
-                type,
-                DecodingError.Context(
-                    codingPath: codingPath,
-                    debugDescription: "Cannot get value of type \(type) -- found no value instead"
-                )
-            )
+            throw valueNotFoundError(type)
         }
         return value
+    }
+
+    private func valueNotFoundError<T>(_ type: T.Type) -> DecodingError {
+        DecodingError.valueNotFound(
+            type,
+            DecodingError.Context(
+                codingPath: codingPath,
+                debugDescription: "Cannot get value of type \(type) -- found no value instead"
+            )
+        )
     }
 
     func decode(_ type: Bool.Type) throws -> Bool {
@@ -1438,8 +1459,13 @@ private struct TOMLSingleValueDecodingContainer: SingleValueDecodingContainer {
 
     func decode<T: Decodable>(_ type: T.Type) throws -> T {
         guard let value else {
-            // Like `JSONDecoder` for a null value, the type decides,
+            // Like `JSONDecoder` for a null value,
+            // a type that this container decodes directly throws an error that names the type,
+            // and another type's initializer decides,
             // so that an optional type decodes `nil`.
+            if Self.decodesDirectly(type) {
+                throw valueNotFoundError(type)
+            }
             return try _TOMLDecoder.decode(
                 type,
                 from: nil,
