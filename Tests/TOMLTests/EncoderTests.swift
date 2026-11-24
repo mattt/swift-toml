@@ -525,6 +525,42 @@ struct EncoderTests {
         )
     }
 
+    /// Like `JSONEncoder`, the strategy splits a leading acronym after its first letter,
+    /// and an explicit coding key writes another key.
+    @Test func convertToSnakeCaseLeadingAcronyms() throws {
+        struct Implicit: Encodable {
+            let URLSession: Int
+            let PATH: Int
+        }
+        struct Explicit: Codable, Equatable {
+            let URLSession: Int
+            let PATH: Int
+
+            enum CodingKeys: String, CodingKey {
+                case URLSession = "urlSession"
+                case PATH = "path"
+            }
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.outputFormatting = .sortedKeys
+        let jsonEncoder = JSONEncoder()
+        jsonEncoder.keyEncodingStrategy = .convertToSnakeCase
+        jsonEncoder.outputFormatting = .sortedKeys
+
+        let implicit = Implicit(URLSession: 1, PATH: 2)
+        #expect(try encoder.encodeToString(implicit) == "p_ath = 2\nu_rl_session = 1\n")
+        #expect(try jsonEncoder.encode(implicit) == Data(#"{"p_ath":2,"u_rl_session":1}"#.utf8))
+
+        let explicit = Explicit(URLSession: 1, PATH: 2)
+        #expect(try encoder.encodeToString(explicit) == "path = 2\nurl_session = 1\n")
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        #expect(try decoder.decode(Explicit.self, from: encoder.encode(explicit)) == explicit)
+    }
+
     @Test func convertToSnakeCaseInNestedContainersAndDictionaries() throws {
         struct Inner: Codable {
             let innerID: Int

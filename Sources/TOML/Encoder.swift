@@ -110,7 +110,12 @@ public final class TOMLEncoder {
         /// A run of uppercase letters is one word,
         /// so `myURLValue` becomes `my_url_value` and `userID` becomes `user_id`.
         /// The first character never starts a new word,
-        /// so `URLSession` becomes `u_rl_session`.
+        /// so a key that starts with an acronym splits after the acronym's first letter:
+        /// `URLSession` becomes `u_rl_session`, and `PATH` becomes `p_ath`.
+        /// `JSONEncoder` writes the same keys.
+        /// To write such a property with another key,
+        /// give it an explicit `CodingKeys` raw value,
+        /// such as `case URLSession = "urlSession"`, which this strategy writes as `url_session`.
         /// Leading and trailing underscores stay.
         ///
         /// As with `JSONEncoder` and `JSONDecoder`,
