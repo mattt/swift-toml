@@ -248,6 +248,17 @@ calls the dictionary's own `encode(to:)` or `init(from:)` directly,
 the strategies convert the dictionary's keys, as Foundation's coders do.
 Version 2.2.2 and earlier of `TOMLEncoder` converted the keys of a dictionary in every case.
 
+### Super Decoders
+
+As with `JSONDecoder`, a keyed container's `superDecoder()` and `superDecoder(forKey:)`
+don't throw for a missing key.
+They return a decoder over a missing value,
+whose keyed and unkeyed containers throw `DecodingError.valueNotFound`
+and whose single-value container decodes an optional value as `nil`.
+Version 2.2.2 and earlier threw `DecodingError.keyNotFound`
+from `superDecoder(forKey:)` for a missing key.
+To find out whether the key is present, call the container's `contains(_:)` method first.
+
 ### Decoding Limits
 
 Protect against malicious or malformed input:

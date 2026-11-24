@@ -57,6 +57,17 @@ import Foundation
 /// or the table that `URL`'s own `Encodable` conformance produces.
 /// A string that `URL(string:)` can't parse throws
 /// `DecodingError.dataCorrupted`.
+///
+/// ## Super Decoders
+///
+/// As with `JSONDecoder`, a keyed container's `superDecoder()` and `superDecoder(forKey:)`
+/// don't throw for a missing key.
+/// They return a decoder over a missing value,
+/// whose keyed and unkeyed containers throw `DecodingError.valueNotFound`
+/// and whose single-value container decodes an optional value as `nil`.
+/// Version 2.2.2 and earlier threw `DecodingError.keyNotFound`
+/// from `superDecoder(forKey:)` for a missing key.
+/// To find out whether the key is present, call the container's `contains(_:)` method first.
 public final class TOMLDecoder {
 
     // MARK: - Date Decoding Strategy
