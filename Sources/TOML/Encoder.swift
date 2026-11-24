@@ -128,11 +128,17 @@ public final class TOMLEncoder {
         ///
         /// As with `JSONEncoder`, this strategy doesn't change the keys
         /// of a dictionary with `String` keys, such as `[String: Int]`,
-        /// but it converts the keys of the values in the dictionary.
-        /// ``TOMLDecoder`` doesn't change those dictionary keys either,
+        /// that you pass to a container's `encode` method
+        /// or encode as the top-level value.
+        /// It still converts the coding keys of the values in the dictionary,
+        /// such as the properties of a structure.
+        /// ``TOMLDecoder`` keeps those dictionary keys too,
         /// so they round-trip with
         /// ``TOMLDecoder/KeyDecodingStrategy/convertFromSnakeCase``.
-        /// Version 2.2.2 and earlier converted the keys of such a dictionary.
+        /// If a custom `encode(to:)` method calls the dictionary's own `encode(to:)` method,
+        /// including with a super encoder,
+        /// this strategy converts the dictionary's keys, as `JSONEncoder` does.
+        /// Version 2.2.2 and earlier converted the keys of a dictionary in every case.
         case convertToSnakeCase
     }
 

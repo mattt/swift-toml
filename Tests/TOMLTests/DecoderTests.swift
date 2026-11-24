@@ -959,6 +959,25 @@ struct TOMLDecoderTests {
         )
     }
 
+    /// Like `JSONDecoder`, the strategy converts the keys of a dictionary
+    /// whose own `init(from:)` a custom `init(from:)` calls directly.
+    @Test func decodeConvertFromSnakeCaseDictionaryDecodedDirectly() throws {
+        struct Direct: Decodable, Equatable {
+            let values: [String: Int]
+
+            init(from decoder: any Decoder) throws {
+                values = try [String: Int](from: decoder)
+            }
+        }
+
+        let direct = try decodeConvertingFromSnakeCase(
+            Direct.self,
+            toml: "my_value = 1",
+            json: #"{"my_value": 1}"#
+        )
+        #expect(direct.values == ["myValue": 1])
+    }
+
     @Test func decodeUseDefaultKeys() throws {
         let toml = """
             userName = "john"

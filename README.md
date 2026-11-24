@@ -239,8 +239,14 @@ By default, `URL` values use their own `Encodable` conformance, which writes a t
 As with `JSONEncoder` and `JSONDecoder`,
 the key strategies don't change the keys of a dictionary with `String` keys,
 such as `[String: Int]`,
-but they convert the keys of the values in the dictionary.
-Version 2.2.2 and earlier of `TOMLEncoder` converted the keys of such a dictionary.
+that you pass to a container's `encode` or `decode` method
+or use as the top-level value.
+They still convert the coding keys of the values in the dictionary,
+such as the properties of a structure.
+If a custom `encode(to:)` method or `init(from:)` initializer
+calls the dictionary's own `encode(to:)` or `init(from:)` directly,
+the strategies convert the dictionary's keys, as Foundation's coders do.
+Version 2.2.2 and earlier of `TOMLEncoder` converted the keys of a dictionary in every case.
 
 ### Decoding Limits
 

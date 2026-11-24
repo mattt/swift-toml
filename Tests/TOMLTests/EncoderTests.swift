@@ -661,6 +661,37 @@ struct EncoderTests {
         )
     }
 
+    /// Like `JSONEncoder`, the strategy converts the keys of a dictionary
+    /// whose own `encode(to:)` method a custom `encode(to:)` method calls directly.
+    @Test func convertToSnakeCaseDictionaryEncodedDirectly() throws {
+        struct Direct: Encodable {
+            let values: [String: Int]
+
+            func encode(to encoder: any Encoder) throws {
+                try values.encode(to: encoder)
+            }
+        }
+        struct DirectWithSuperEncoder: Encodable {
+            let values: [String: Int]
+
+            enum CodingKeys: CodingKey {}
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try values.encode(to: container.superEncoder())
+            }
+        }
+
+        #expect(
+            try expectSameStructure(Direct(values: ["myValue": 1]), snakeCaseKeys: true)
+                == .table(["my_value": .integer(1)])
+        )
+        #expect(
+            try expectSameStructure(DirectWithSuperEncoder(values: ["myValue": 1]), snakeCaseKeys: true)
+                == .table(["super": .table(["my_value": .integer(1)])])
+        )
+    }
+
     /// An explicit coding key round-trips a property such as `userID`,
     /// which the key strategies alone don't.
     @Test func convertToSnakeCaseRoundTripWithExplicitCodingKey() throws {

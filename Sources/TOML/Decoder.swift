@@ -107,7 +107,13 @@ public final class TOMLDecoder {
         /// so `_user_name_` becomes `_userName_`.
         ///
         /// As with `JSONDecoder`, this strategy doesn't change the keys
-        /// of a dictionary with `String` keys, such as `[String: String]`.
+        /// of a dictionary with `String` keys, such as `[String: String]`,
+        /// that you decode with a container's `decode` method
+        /// or as the top-level value.
+        /// It still converts the table keys for the values in the dictionary,
+        /// such as the properties of a structure.
+        /// If a custom `init(from:)` initializer calls the dictionary's own `init(from:)`,
+        /// this strategy converts the dictionary's keys, as `JSONDecoder` does.
         case convertFromSnakeCase
     }
 
