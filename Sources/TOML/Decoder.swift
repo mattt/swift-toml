@@ -1068,19 +1068,21 @@ private struct TOMLKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContaine
     /// for a keyed or unkeyed container,
     /// and its single-value container decodes only `nil`.
     func superDecoder() throws -> any Decoder {
-        let key = TOMLCodingKey(stringValue: "super")
-        return _TOMLDecoder(
-            value: dict[key.stringValue],
-            codingPath: codingPath + [key],
-            userInfo: userInfo,
-            options: options
-        )
+        superDecoder(forCodingKey: TOMLCodingKey(stringValue: "super"))
     }
 
+    /// Returns a decoder for the value at the given key.
+    ///
+    /// Like `JSONDecoder`, this doesn't throw if the table doesn't have the key,
+    /// and the decoder for a missing key behaves as it does for `superDecoder()`.
+    /// Version 2.2.2 and earlier threw `DecodingError.keyNotFound`.
     func superDecoder(forKey key: Key) throws -> any Decoder {
-        let value = try getValue(forKey: key)
-        return _TOMLDecoder(
-            value: value,
+        superDecoder(forCodingKey: key)
+    }
+
+    private func superDecoder(forCodingKey key: any CodingKey) -> any Decoder {
+        _TOMLDecoder(
+            value: dict[key.stringValue],
             codingPath: codingPath + [key],
             userInfo: userInfo,
             options: options
