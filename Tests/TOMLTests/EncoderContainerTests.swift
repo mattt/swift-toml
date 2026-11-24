@@ -382,11 +382,8 @@ struct EncoderContainerTests {
     }
 
     /// Encodes its superclass with `superEncoder()`,
-    /// after it encodes its own property.
-    ///
-    /// The tests don't decode this class,
-    /// because `TOMLDecoder`'s keyed `superDecoder()` reads the whole table
-    /// and not the `super` key that `JSONDecoder` reads.
+    /// after it encodes its own property,
+    /// and decodes it with `superDecoder()`.
     final class SuperEncoded: Base {
         let b: Int
 
@@ -400,7 +397,9 @@ struct EncoderContainerTests {
         }
 
         required init(from decoder: any Decoder) throws {
-            fatalError("Not decoded in these tests")
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            b = try container.decode(Int.self, forKey: .b)
+            try super.init(from: container.superDecoder())
         }
 
         override func encode(to encoder: any Encoder) throws {
@@ -450,6 +449,244 @@ struct EncoderContainerTests {
     @Test func subclassEncodesSuperclassWithSuperEncoder() throws {
         let tree = try expectSameStructure(SuperEncoded(a: 1, b: 2))
         #expect(tree == .table(["b": .integer(2), "super": .table(["a": .integer(1)])]))
+    }
+
+    @Test func subclassDecodesSuperclassWithSuperDecoder() throws {
+        let data = try TOMLEncoder().encode(SuperEncoded(a: 1, b: 2))
+        let decoded = try TOMLDecoder().decode(SuperEncoded.self, from: data)
+        #expect(decoded.a == 1)
+        #expect(decoded.b == 2)
+    }
+
+    /// The key decoding strategy doesn't change the key `super`.
+    @Test func superDecoderWithConvertFromSnakeCase() throws {
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(SuperEncoded.self, from: "b = 2\n\n[super]\na = 1\n")
+        #expect(decoded.a == 1)
+        #expect(decoded.b == 2)
+    }
+
+    /// Like `JSONDecoder`, the keyed `superDecoder()` doesn't throw for a missing `super` key,
+    /// but the decoder it returns has no keyed container.
+    @Test func superDecoderForMissingKeyMatchesJSONDecoder() throws {
+        let tomlError = decodingErrorDescription {
+            _ = try TOMLDecoder().decode(SuperEncoded.self, from: "b = 2")
+        }
+        let jsonError = decodingErrorDescription {
+            _ = try JSONDecoder().decode(SuperEncoded.self, from: Data(#"{"b": 2}"#.utf8))
+        }
+        #expect(tomlError == "valueNotFound at super")
+        #expect(tomlError == jsonError)
+    }
+
+    /// Like `JSONDecoder`, `superDecoder(forKey:)` doesn't throw for a missing key,
+    /// but the decoder it returns has no keyed container.
+    @Test func superDecoderForKeyForMissingKeyMatchesJSONDecoder() throws {
+        let tomlError = decodingErrorDescription {
+            _ = try TOMLDecoder().decode(SuperEncodedForKey.self, from: "b = 2")
+        }
+        let jsonError = decodingErrorDescription {
+            _ = try JSONDecoder().decode(SuperEncodedForKey.self, from: Data(#"{"b": 2}"#.utf8))
+        }
+        #expect(tomlError == "valueNotFound at parent")
+        #expect(tomlError == jsonError)
+    }
+
+    /// The key that the test types read with a super decoder.
+    enum SuperDecoderKey: String, CodingKey, CaseIterable {
+        /// Reads the key with `superDecoder()`.
+        case `super`
+        /// Reads the key with `superDecoder(forKey:)`.
+        case parent
+
+        static let userInfoKey = CodingUserInfoKey(rawValue: "superDecoderKey")!
+
+        /// Returns a super decoder for the key that `decoder`'s user info names,
+        /// or `super` if it names none.
+        static func superDecoder(of decoder: any Decoder) throws -> any Decoder {
+            let container = try decoder.container(keyedBy: SuperDecoderKey.self)
+            switch decoder.userInfo[userInfoKey] as? SuperDecoderKey {
+            case .parent: return try container.superDecoder(forKey: .parent)
+            case .super, nil: return try container.superDecoder()
+            }
+        }
+    }
+
+    /// Returns a `TOMLDecoder` and a `JSONDecoder`
+    /// whose test types read the given key with a super decoder.
+    private func decoders(
+        reading key: SuperDecoderKey,
+        userInfo: [CodingUserInfoKey: any Sendable] = [:]
+    ) -> (TOMLDecoder, JSONDecoder) {
+        let tomlDecoder = TOMLDecoder()
+        let jsonDecoder = JSONDecoder()
+        tomlDecoder.userInfo[SuperDecoderKey.userInfoKey] = key
+        jsonDecoder.userInfo[SuperDecoderKey.userInfoKey] = key
+        for (userInfoKey, value) in userInfo {
+            tomlDecoder.userInfo[userInfoKey] = value
+            jsonDecoder.userInfo[userInfoKey] = value
+        }
+        return (tomlDecoder, jsonDecoder)
+    }
+
+    /// An integer whose initializer returns 0 for a missing value.
+    struct DefaultingCount: Decodable, Equatable {
+        let value: Int
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            value = container.decodeNil() ? 0 : try container.decode(Int.self)
+        }
+    }
+
+    /// Reads optional values and a value with a custom initializer
+    /// from the single-value container of a super decoder.
+    struct OptionalSuperValue: Decodable {
+        let isNil: Bool
+        let value: Int?
+        let date: Date?
+        let count: DefaultingCount
+
+        init(from decoder: any Decoder) throws {
+            let superContainer = try SuperDecoderKey.superDecoder(of: decoder).singleValueContainer()
+            isNil = superContainer.decodeNil()
+            value = try superContainer.decode(Int?.self)
+            date = superContainer.decodeNil() ? try superContainer.decode(Date?.self) : nil
+            count = try superContainer.decode(DefaultingCount.self)
+        }
+    }
+
+    @Test(arguments: SuperDecoderKey.allCases)
+    func superDecoderSingleValueContainerMatchesJSONDecoder(key: SuperDecoderKey) throws {
+        let (tomlDecoder, jsonDecoder) = decoders(reading: key)
+
+        let tomlMissing = try tomlDecoder.decode(OptionalSuperValue.self, from: "")
+        let jsonMissing = try jsonDecoder.decode(OptionalSuperValue.self, from: Data("{}".utf8))
+        #expect(tomlMissing.isNil && jsonMissing.isNil)
+        #expect(tomlMissing.value == nil && jsonMissing.value == nil)
+        #expect(tomlMissing.date == nil && jsonMissing.date == nil)
+        #expect(tomlMissing.count.value == 0 && jsonMissing.count.value == 0)
+
+        let tomlPresent = try tomlDecoder.decode(OptionalSuperValue.self, from: "\(key.rawValue) = 3")
+        let jsonPresent = try jsonDecoder.decode(
+            OptionalSuperValue.self,
+            from: Data(#"{"\#(key.rawValue)": 3}"#.utf8)
+        )
+        #expect(!tomlPresent.isNil && !jsonPresent.isNil)
+        #expect(tomlPresent.value == 3 && jsonPresent.value == 3)
+        #expect(tomlPresent.count.value == 3 && jsonPresent.count.value == 3)
+    }
+
+    /// Gets a keyed or unkeyed container from a super decoder.
+    struct SuperContainer: Decodable {
+        static let isKeyed = CodingUserInfoKey(rawValue: "isKeyed")!
+
+        init(from decoder: any Decoder) throws {
+            let superDecoder = try SuperDecoderKey.superDecoder(of: decoder)
+            if decoder.userInfo[Self.isKeyed] as? Bool == true {
+                _ = try superDecoder.container(keyedBy: SuperDecoderKey.self)
+            } else {
+                _ = try superDecoder.unkeyedContainer()
+            }
+        }
+    }
+
+    /// For a missing key, a super decoder has no keyed or unkeyed container,
+    /// as with `JSONDecoder`.
+    @Test(arguments: SuperDecoderKey.allCases, [true, false])
+    func superDecoderMissingValueContainerMatchesJSONDecoder(key: SuperDecoderKey, isKeyed: Bool) {
+        let (tomlDecoder, jsonDecoder) = decoders(reading: key, userInfo: [SuperContainer.isKeyed: isKeyed])
+
+        let tomlError = valueNotFound { _ = try tomlDecoder.decode(SuperContainer.self, from: "") }
+        let jsonError = valueNotFound { _ = try jsonDecoder.decode(SuperContainer.self, from: Data("{}".utf8)) }
+        #expect(tomlError == "\(isKeyed ? "Dictionary<String, Any>" : "Array<Any>") at \(key.rawValue)")
+        #expect(tomlError == jsonError)
+    }
+
+    /// Decodes a value of the type that `userInfo` names
+    /// from the single-value container of a super decoder.
+    struct MissingSuperValue: Decodable {
+        static let typeName = CodingUserInfoKey(rawValue: "typeName")!
+
+        init(from decoder: any Decoder) throws {
+            let value = try SuperDecoderKey.superDecoder(of: decoder).singleValueContainer()
+            switch decoder.userInfo[Self.typeName] as? String {
+            case "Int": _ = try value.decode(Int.self)
+            case "Int8": _ = try value.decode(Int8.self)
+            case "Int16": _ = try value.decode(Int16.self)
+            case "Int32": _ = try value.decode(Int32.self)
+            case "Int64": _ = try value.decode(Int64.self)
+            case "UInt": _ = try value.decode(UInt.self)
+            case "UInt8": _ = try value.decode(UInt8.self)
+            case "UInt16": _ = try value.decode(UInt16.self)
+            case "UInt32": _ = try value.decode(UInt32.self)
+            case "UInt64": _ = try value.decode(UInt64.self)
+            case "Float": _ = try value.decode(Float.self)
+            case "Double": _ = try value.decode(Double.self)
+            case "Bool": _ = try value.decode(Bool.self)
+            case "Date": _ = try value.decode(Date.self)
+            case "URL": _ = try value.decode(URL.self)
+            case "Data": _ = try value.decode(Data.self)
+            case "Decimal": _ = try value.decode(Decimal.self)
+            case "LocalDateTime": _ = try value.decode(LocalDateTime.self)
+            case "LocalDate": _ = try value.decode(LocalDate.self)
+            case "LocalTime": _ = try value.decode(LocalTime.self)
+            case "TOMLValue": _ = try value.decode(TOMLValue.self)
+            default: _ = try value.decode(String.self)
+            }
+        }
+    }
+
+    /// Returns the type and coding path of the `DecodingError.valueNotFound` that `body` throws.
+    private func valueNotFound(_ body: () throws -> Void) -> String {
+        do {
+            try body()
+            return "no error"
+        } catch DecodingError.valueNotFound(let type, let context) {
+            return "\(type) at \(context.codingPath.map(\.stringValue).joined(separator: "."))"
+        } catch {
+            return "\(error)"
+        }
+    }
+
+    /// For a missing key, the error names the requested type and the key,
+    /// as `JSONDecoder`'s does for the types that it decodes itself.
+    @Test(
+        arguments: SuperDecoderKey.allCases,
+        [
+            "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Float",
+            "Double", "Bool", "String", "Date", "URL", "Data", "Decimal", "LocalDateTime", "LocalDate", "LocalTime",
+            "TOMLValue",
+        ]
+    )
+    func superDecoderMissingValueNamesRequestedType(key: SuperDecoderKey, typeName: String) {
+        let (tomlDecoder, jsonDecoder) = decoders(reading: key, userInfo: [MissingSuperValue.typeName: typeName])
+
+        let tomlError = valueNotFound { _ = try tomlDecoder.decode(MissingSuperValue.self, from: "") }
+        let jsonError = valueNotFound { _ = try jsonDecoder.decode(MissingSuperValue.self, from: Data("{}".utf8)) }
+        // `Decimal` is named `NSDecimal` on Apple platforms.
+        let typeDescription = typeName == "Decimal" ? "\(Decimal.self)" : typeName
+        #expect(tomlError == "\(typeDescription) at \(key.rawValue)")
+        switch typeName {
+        case "Bool", "TOMLValue":
+            // `JSONDecoder` throws `typeMismatch` for these types when they're missing.
+            break
+        case "LocalDateTime", "LocalDate", "LocalTime":
+            // `JSONDecoder` decodes these types with their keyed containers,
+            // so the error names `[String: Any]`.
+            #expect(jsonError == "Dictionary<String, Any> at \(key.rawValue)")
+        default:
+            #expect(tomlError == jsonError)
+        }
+    }
+
+    /// A subclass that passes its own decoder to `super.init(from:)` reads the whole table.
+    @Test func subclassDecodesSuperclassWithSameDecoder() throws {
+        let data = try TOMLEncoder().encode(Derived(a: 1, b: 2))
+        let decoded = try TOMLDecoder().decode(Derived.self, from: data)
+        #expect(decoded.a == 1)
+        #expect(decoded.b == 2)
     }
 
     @Test func subclassEncodesSuperclassWithSuperEncoderForKey() throws {
@@ -640,6 +877,30 @@ struct EncoderContainerTests {
                 """
         )
         #expect(try TOMLDecoder().decode(Package.self, from: toml) == package)
+    }
+}
+
+// MARK: - Error Comparison
+
+/// Returns the case and coding path of the `DecodingError` that `body` throws,
+/// so that tests can compare errors from `TOMLDecoder` and `JSONDecoder`.
+func decodingErrorDescription(_ body: () throws -> Void) -> String {
+    do {
+        try body()
+        return "no error"
+    } catch let error as DecodingError {
+        let name: String
+        let context: DecodingError.Context
+        switch error {
+        case .typeMismatch(_, let c): (name, context) = ("typeMismatch", c)
+        case .valueNotFound(_, let c): (name, context) = ("valueNotFound", c)
+        case .keyNotFound(_, let c): (name, context) = ("keyNotFound", c)
+        case .dataCorrupted(let c): (name, context) = ("dataCorrupted", c)
+        @unknown default: return "unknown DecodingError"
+        }
+        return "\(name) at \(context.codingPath.map(\.stringValue).joined(separator: "."))"
+    } catch {
+        return "\(type(of: error))"
     }
 }
 

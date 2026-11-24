@@ -853,6 +853,131 @@ struct TOMLDecoderTests {
         #expect(topLevel == ["MY_VAR": "1"])
     }
 
+    /// A table of camelCase keys, for values in dictionaries.
+    struct Service: Decodable, Equatable {
+        let displayName: String
+        let extraHeaders: [String: String]
+    }
+
+    /// Decodes a value from TOML and from JSON with `.convertFromSnakeCase`,
+    /// expects both results to be equal, and returns the result from TOML.
+    private func decodeConvertingFromSnakeCase<T: Decodable & Equatable>(
+        _ type: T.Type,
+        toml: String,
+        json: String,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws -> T {
+        let tomlDecoder = TOMLDecoder()
+        tomlDecoder.keyDecodingStrategy = .convertFromSnakeCase
+        let jsonDecoder = JSONDecoder()
+        jsonDecoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        let fromTOML = try tomlDecoder.decode(type, from: toml)
+        let fromJSON = try jsonDecoder.decode(type, from: Data(json.utf8))
+        #expect(fromTOML == fromJSON, sourceLocation: sourceLocation)
+        return fromTOML
+    }
+
+    /// Like `JSONDecoder`, the strategy keeps the keys of a dictionary property
+    /// and converts the keys of the tables in it.
+    @Test func decodeConvertFromSnakeCaseDictionaryPropertyMatchesJSONDecoder() throws {
+        struct Config: Decodable, Equatable {
+            let envVars: [String: String]
+            let serviceByName: [String: Service]
+        }
+
+        let config = try decodeConvertingFromSnakeCase(
+            Config.self,
+            toml: """
+                [env_vars]
+                MY_VAR = "1"
+                other_var = "2"
+
+                [service_by_name.web_server]
+                display_name = "Web"
+                extra_headers = { X_REQUEST_ID = "a" }
+                """,
+            json: """
+                {
+                  "env_vars": {"MY_VAR": "1", "other_var": "2"},
+                  "service_by_name": {
+                    "web_server": {"display_name": "Web", "extra_headers": {"X_REQUEST_ID": "a"}}
+                  }
+                }
+                """
+        )
+        #expect(config.envVars == ["MY_VAR": "1", "other_var": "2"])
+        #expect(
+            config.serviceByName == ["web_server": Service(displayName: "Web", extraHeaders: ["X_REQUEST_ID": "a"])]
+        )
+    }
+
+    /// Like `JSONDecoder`, the strategy keeps the keys of a top-level dictionary.
+    @Test func decodeConvertFromSnakeCaseTopLevelDictionaryMatchesJSONDecoder() throws {
+        let values = try decodeConvertingFromSnakeCase(
+            [String: Int].self,
+            toml: "my_value = 1\nMY_VAR = 2",
+            json: #"{"my_value": 1, "MY_VAR": 2}"#
+        )
+        #expect(values == ["my_value": 1, "MY_VAR": 2])
+
+        let services = try decodeConvertingFromSnakeCase(
+            [String: Service].self,
+            toml: "[web_server]\ndisplay_name = \"Web\"\nextra_headers = {}",
+            json: #"{"web_server": {"display_name": "Web", "extra_headers": {}}}"#
+        )
+        #expect(services == ["web_server": Service(displayName: "Web", extraHeaders: [:])])
+    }
+
+    /// Like `JSONDecoder`, the strategy keeps the keys of each dictionary in a nested dictionary.
+    @Test func decodeConvertFromSnakeCaseNestedDictionaryMatchesJSONDecoder() throws {
+        struct Config: Decodable, Equatable {
+            let servicesByRegion: [String: [String: Service]]
+        }
+
+        let config = try decodeConvertingFromSnakeCase(
+            Config.self,
+            toml: """
+                [services_by_region.us_east.web_server]
+                display_name = "Web"
+                extra_headers = { X_REQUEST_ID = "a" }
+                """,
+            json: """
+                {
+                  "services_by_region": {
+                    "us_east": {
+                      "web_server": {"display_name": "Web", "extra_headers": {"X_REQUEST_ID": "a"}}
+                    }
+                  }
+                }
+                """
+        )
+        #expect(
+            config.servicesByRegion == [
+                "us_east": ["web_server": Service(displayName: "Web", extraHeaders: ["X_REQUEST_ID": "a"])]
+            ]
+        )
+    }
+
+    /// Like `JSONDecoder`, the strategy converts the keys of a dictionary
+    /// whose own `init(from:)` a custom `init(from:)` calls directly.
+    @Test func decodeConvertFromSnakeCaseDictionaryDecodedDirectly() throws {
+        struct Direct: Decodable, Equatable {
+            let values: [String: Int]
+
+            init(from decoder: any Decoder) throws {
+                values = try [String: Int](from: decoder)
+            }
+        }
+
+        let direct = try decodeConvertingFromSnakeCase(
+            Direct.self,
+            toml: "my_value = 1",
+            json: #"{"my_value": 1}"#
+        )
+        #expect(direct.values == ["myValue": 1])
+    }
+
     @Test func decodeUseDefaultKeys() throws {
         let toml = """
             userName = "john"
@@ -1298,6 +1423,40 @@ struct TOMLDecoderTests {
         }
     }
 
+    // MARK: - Error Types
+
+    struct Server: Decodable {
+        let host: String
+        let port: Int
+    }
+
+    @Test func typeMismatchThrowsDecodingError() {
+        #expect {
+            try TOMLDecoder().decode(Server.self, from: #"host = "localhost"\#nport = "80""#)
+        } throws: { error in
+            guard case .typeMismatch(_, let context) = error as? DecodingError else { return false }
+            return context.codingPath.map(\.stringValue) == ["port"]
+        }
+    }
+
+    @Test func missingKeyThrowsDecodingError() {
+        #expect {
+            try TOMLDecoder().decode(Server.self, from: #"host = "localhost""#)
+        } throws: { error in
+            guard case .keyNotFound(let key, _) = error as? DecodingError else { return false }
+            return key.stringValue == "port"
+        }
+    }
+
+    @Test func syntaxErrorThrowsInvalidSyntax() {
+        #expect {
+            try TOMLDecoder().decode(Server.self, from: "host = \nport = 80")
+        } throws: { error in
+            guard case .invalidSyntax(let line, _, _) = error as? TOMLDecodingError else { return false }
+            return line == 1
+        }
+    }
+
     // MARK: - Error Descriptions
 
     @Test func errorDescriptionInvalidSyntax() {
@@ -1306,12 +1465,16 @@ struct TOMLDecoderTests {
         #expect(error.description.contains("column 10"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionTypeMismatch() {
         let error = TOMLDecodingError.typeMismatch(expected: "String", found: "Integer", codingPath: [])
         #expect(error.description.contains("String"))
         #expect(error.description.contains("Integer"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionKeyNotFound() {
         struct TestKey: CodingKey {
             var stringValue: String
@@ -1323,11 +1486,15 @@ struct TOMLDecoderTests {
         #expect(error.description.contains("missing"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionValueNotFound() {
         let error = TOMLDecodingError.valueNotFound(type: "String", codingPath: [])
         #expect(error.description.contains("String"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionDataCorrupted() {
         let error = TOMLDecodingError.dataCorrupted(message: "corrupted", codingPath: [])
         #expect(error.description.contains("corrupted"))

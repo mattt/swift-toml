@@ -182,6 +182,24 @@ decodes as the following second.
 The parser accepts second 60 at minute 59
 without checking that a leap second occurred.
 
+### Documents of Unknown Shape
+
+Decode a document, or a part of one, as `TOMLValue`
+to read it as written, without the date or key strategies:
+
+```swift
+struct Package: Codable {
+    var name: String
+    var metadata: [String: TOMLValue]  // Any table
+}
+
+let document = try TOMLDecoder().decode(TOMLValue.self, from: toml)
+```
+
+`TOMLEncoder` writes a `TOMLValue` as it is,
+except that it writes offset date-times with millisecond precision,
+so `07:32:00.123456Z` round-trips as `07:32:00.123Z`.
+
 ### Key Decoding Strategy
 
 Automatically convert snake_case keys to camelCase:
@@ -217,6 +235,29 @@ let data = try encoder.encode(myValue)
 ```
 
 By default, `URL` values use their own `Encodable` conformance, which writes a table with a `relative` key. Set `urlEncodingStrategy` to `.absoluteString` to write a string, such as `url = "https://example.com/"`. The decoder reads both forms.
+
+As with `JSONEncoder` and `JSONDecoder`,
+the key strategies don't change the keys of a dictionary with `String` keys,
+such as `[String: Int]`,
+that you pass to a container's `encode` or `decode` method
+or use as the top-level value.
+They still convert the coding keys of the values in the dictionary,
+such as the properties of a structure.
+If a custom `encode(to:)` method or `init(from:)` initializer
+calls the dictionary's own `encode(to:)` or `init(from:)` directly,
+the strategies convert the dictionary's keys, as Foundation's coders do.
+Version 2.2.2 and earlier of `TOMLEncoder` converted the keys of a dictionary in every case.
+
+### Super Decoders
+
+As with `JSONDecoder`, a keyed container's `superDecoder()` and `superDecoder(forKey:)`
+don't throw for a missing key.
+They return a decoder over a missing value,
+whose keyed and unkeyed containers throw `DecodingError.valueNotFound`
+and whose single-value container decodes an optional value as `nil`.
+Version 2.2.2 and earlier threw `DecodingError.keyNotFound`
+from `superDecoder(forKey:)` for a missing key.
+To find out whether the key is present, call the container's `contains(_:)` method first.
 
 ### Decoding Limits
 

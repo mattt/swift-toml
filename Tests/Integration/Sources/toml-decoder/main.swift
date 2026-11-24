@@ -9,7 +9,7 @@ struct TOMLDecoderCLI {
             // so that the test covers the decoder's UTF-8 handling.
             let input = FileHandle.standardInput.readDataToEndOfFile()
             let decoder = TOMLDecoder()
-            let value = try decoder.decode(TaggedValue.self, from: input)
+            let value = try decoder.decode(TOMLValue.self, from: input)
             let json = value.toJSON()
             print(json)
         } catch {
@@ -19,77 +19,7 @@ struct TOMLDecoderCLI {
     }
 }
 
-enum TaggedValue: Decodable, Sendable {
-    case string(String)
-    case integer(Int64)
-    case float(Double)
-    case boolean(Bool)
-    case offsetDateTime(Date)
-    case localDateTime(LocalDateTime)
-    case localDate(LocalDate)
-    case localTime(LocalTime)
-    case array([TaggedValue])
-    case table([String: TaggedValue])
-
-    init(from decoder: Decoder) throws {
-        if let container = try? decoder.container(keyedBy: DynamicKey.self) {
-            var table: [String: TaggedValue] = [:]
-            for key in container.allKeys {
-                table[key.stringValue] = try container.decode(TaggedValue.self, forKey: key)
-            }
-            self = .table(table)
-            return
-        }
-
-        if var container = try? decoder.unkeyedContainer() {
-            var array: [TaggedValue] = []
-            while !container.isAtEnd {
-                array.append(try container.decode(TaggedValue.self))
-            }
-            self = .array(array)
-            return
-        }
-
-        let container = try decoder.singleValueContainer()
-
-        if let d = try? container.decode(LocalDate.self) {
-            self = .localDate(d)
-            return
-        }
-        if let dt = try? container.decode(LocalDateTime.self) {
-            self = .localDateTime(dt)
-            return
-        }
-        if let t = try? container.decode(LocalTime.self) {
-            self = .localTime(t)
-            return
-        }
-        if let date = try? container.decode(Date.self) {
-            self = .offsetDateTime(date)
-            return
-        }
-        if let b = try? container.decode(Bool.self) {
-            self = .boolean(b)
-            return
-        }
-        if let i = try? container.decode(Int64.self) {
-            self = .integer(i)
-            return
-        }
-        if let f = try? container.decode(Double.self) {
-            self = .float(f)
-            return
-        }
-        if let s = try? container.decode(String.self) {
-            self = .string(s)
-            return
-        }
-
-        throw DecodingError.dataCorrupted(
-            DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unable to decode value")
-        )
-    }
-
+extension TOMLValue {
     func toJSON() -> String {
         var result = ""
         writeJSON(to: &result)
@@ -152,21 +82,6 @@ enum TaggedValue: Decodable, Sendable {
             }
             output += "}"
         }
-    }
-}
-
-struct DynamicKey: CodingKey {
-    var stringValue: String
-    var intValue: Int?
-
-    init?(stringValue: String) {
-        self.stringValue = stringValue
-        self.intValue = nil
-    }
-
-    init?(intValue: Int) {
-        self.stringValue = String(intValue)
-        self.intValue = intValue
     }
 }
 

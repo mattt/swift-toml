@@ -105,6 +105,40 @@ public final class TOMLEncoder {
         /// Convert keys from camelCase to snake_case.
         ///
         /// For example, `userName` in Swift becomes `user_name` in TOML.
+        ///
+        /// This strategy writes the same keys as `JSONEncoder`'s strategy of the same name.
+        /// A run of uppercase letters is one word,
+        /// so `myURLValue` becomes `my_url_value` and `userID` becomes `user_id`.
+        /// The first character never starts a new word,
+        /// so a key that starts with an acronym splits after the acronym's first letter:
+        /// `URLSession` becomes `u_rl_session`, and `PATH` becomes `p_ath`.
+        /// `JSONEncoder` writes the same keys.
+        /// To write such a property with another key,
+        /// give it an explicit `CodingKeys` raw value,
+        /// such as `case URLSession = "urlSession"`, which this strategy writes as `url_session`.
+        /// Leading and trailing underscores stay.
+        ///
+        /// As with `JSONEncoder` and `JSONDecoder`,
+        /// a property such as `userID` doesn't round-trip
+        /// with ``TOMLDecoder/KeyDecodingStrategy/convertFromSnakeCase``,
+        /// because `user_id` decodes as `userId`.
+        /// To round-trip such a property under both strategies,
+        /// give it an explicit `CodingKeys` raw value that each strategy converts to the other,
+        /// such as `case userID = "userId"`.
+        ///
+        /// As with `JSONEncoder`, this strategy doesn't change the keys
+        /// of a dictionary with `String` keys, such as `[String: Int]`,
+        /// that you pass to a container's `encode` method
+        /// or encode as the top-level value.
+        /// It still converts the coding keys of the values in the dictionary,
+        /// such as the properties of a structure.
+        /// ``TOMLDecoder`` keeps those dictionary keys too,
+        /// so they round-trip with
+        /// ``TOMLDecoder/KeyDecodingStrategy/convertFromSnakeCase``.
+        /// If a custom `encode(to:)` method calls the dictionary's own `encode(to:)` method,
+        /// including with a super encoder,
+        /// this strategy converts the dictionary's keys, as `JSONEncoder` does.
+        /// Version 2.2.2 and earlier converted the keys of a dictionary in every case.
         case convertToSnakeCase
     }
 
@@ -148,7 +182,34 @@ public final class TOMLEncoder {
         /// and useful for version control.
         public static let sortedKeys = OutputFormatting(rawValue: 1 << 0)
 
-        /// Format the output with additional whitespace for readability.
+        /// Write each array of more than one element on several lines.
+        ///
+        /// Each element is on its own line, indented four spaces,
+        /// and followed by a comma:
+        ///
+        /// ```toml
+        /// ports = [
+        ///     8080,
+        ///     8081,
+        /// ]
+        /// ```
+        ///
+        /// A nested array of more than one element is indented
+        /// one more level for each level of nesting,
+        /// including an array in a one-element array or in an inline table:
+        ///
+        /// ```toml
+        /// single = [[
+        ///     1,
+        ///     2,
+        /// ]]
+        /// ```
+        ///
+        /// An empty array and the brackets of a one-element array stay on one line,
+        /// and so do an inline table's braces and the start of each of its entries.
+        /// This option doesn't change the form of an array of tables
+        /// that the encoder writes as `[[name]]` sections,
+        /// but it applies to the arrays in those tables.
         public static let prettyPrinted = OutputFormatting(rawValue: 1 << 1)
     }
 
@@ -180,7 +241,11 @@ public final class TOMLEncoder {
     ///
     /// - Parameter value: An `Encodable` value to convert to TOML format.
     /// - Returns: UTF-8 encoded data containing the TOML representation.
-    /// - Throws: ``TOMLEncodingError`` if encoding fails.
+    /// - Throws: ``TOMLEncodingError/invalidValue(_:codingPath:)``
+    ///   for a value that TOML can't represent,
+    ///   such as an integer greater than `Int64.max`
+    ///   or a top-level value that isn't a table,
+    ///   and any error that a value's `encode(to:)` method throws.
     public func encode<T: Encodable>(_ value: T) throws -> Data {
         let string = try encodeToString(value)
         guard let data = string.data(using: .utf8) else {
@@ -193,7 +258,11 @@ public final class TOMLEncoder {
     ///
     /// - Parameter value: An `Encodable` value to convert to TOML format.
     /// - Returns: A string containing the TOML representation.
-    /// - Throws: ``TOMLEncodingError`` if encoding fails.
+    /// - Throws: ``TOMLEncodingError/invalidValue(_:codingPath:)``
+    ///   for a value that TOML can't represent,
+    ///   such as an integer greater than `Int64.max`
+    ///   or a top-level value that isn't a table,
+    ///   and any error that a value's `encode(to:)` method throws.
     public func encodeToString<T: Encodable>(_ value: T) throws -> String {
         let encoder = _TOMLEncoder(
             codingPath: [],
@@ -203,7 +272,8 @@ public final class TOMLEncoder {
                 keyEncodingStrategy: keyEncodingStrategy,
                 urlEncodingStrategy: urlEncodingStrategy,
                 outputFormatting: outputFormatting
-            )
+            ),
+            keepsTableKeys: value is any StringKeyedDictionary
         )
 
         try value.encode(to: encoder)
@@ -212,12 +282,12 @@ public final class TOMLEncoder {
             throw TOMLEncodingError.invalidValue("No value encoded", codingPath: [])
         }
 
-        return try serialize(value, sortKeys: outputFormatting.contains(.sortedKeys))
+        return try serialize(value)
     }
 
     // MARK: - Private Serialization
 
-    private func serialize(_ value: TOMLValue, sortKeys: Bool) throws -> String {
+    private func serialize(_ value: TOMLValue) throws -> String {
         // A TOML document is a table, so it can't hold another value at the top level.
         guard value.isTable else {
             throw TOMLEncodingError.invalidValue(
@@ -227,11 +297,26 @@ public final class TOMLEncoder {
         }
 
         var result = ""
-        serializeTable(value, to: &result, path: [], sortKeys: sortKeys)
+        let serializer = Serializer(
+            sortKeys: outputFormatting.contains(.sortedKeys),
+            prettyPrinted: outputFormatting.contains(.prettyPrinted)
+        )
+        serializer.serializeTable(value, to: &result, path: [])
         return result
     }
+}
 
-    private func serializeTable(_ value: TOMLValue, to output: inout String, path: [String], sortKeys: Bool) {
+// MARK: - Serialization
+
+/// Writes a TOML document for a table, with the encoder's output formatting.
+private struct Serializer {
+    /// The indentation for each level of a multi-line array.
+    static let indentation = "    "
+
+    let sortKeys: Bool
+    let prettyPrinted: Bool
+
+    func serializeTable(_ value: TOMLValue, to output: inout String, path: [String]) {
         guard case .table(let dict) = value else { return }
 
         let keys = sortKeys ? dict.keys.sorted() : Array(dict.keys)
@@ -254,14 +339,14 @@ public final class TOMLEncoder {
 
         for key in simpleKeys {
             guard let val = dict[key] else { continue }
-            output += "\(escapeKey(key)) = \(serializeValue(val, sortKeys: sortKeys))\n"
+            output += "\(escapeKey(key)) = \(serializeValue(val, indentLevel: prettyPrinted ? 0 : nil))\n"
         }
 
         for key in tableKeys {
             guard let val = dict[key] else { continue }
             let newPath = path + [key]
             output += "\n[\(newPath.map(escapeKey).joined(separator: "."))]\n"
-            serializeTable(val, to: &output, path: newPath, sortKeys: sortKeys)
+            serializeTable(val, to: &output, path: newPath)
         }
 
         for key in arrayOfTablesKeys {
@@ -270,12 +355,17 @@ public final class TOMLEncoder {
             for item in arr {
                 output += "\n[[\(newPath.map(escapeKey).joined(separator: "."))]]"
                 output += "\n"
-                serializeTable(item, to: &output, path: newPath, sortKeys: sortKeys)
+                serializeTable(item, to: &output, path: newPath)
             }
         }
     }
 
-    private func serializeValue(_ value: TOMLValue, sortKeys: Bool) -> String {
+    /// Returns the TOML text for a value.
+    ///
+    /// - Parameter indentLevel: The indentation level of the line where the value starts,
+    ///   if each array of more than one element in the value spans several lines,
+    ///   or `nil` if the value is on one line.
+    private func serializeValue(_ value: TOMLValue, indentLevel: Int?) -> String {
         switch value {
         case .string(let s):
             return "\"\(escapeString(s))\""
@@ -299,13 +389,26 @@ public final class TOMLEncoder {
         case .localTime(let t):
             return formatLocalTime(t)
         case .array(let arr):
-            let items = arr.map { serializeValue($0, sortKeys: sortKeys) }
+            if let indentLevel, arr.count > 1 {
+                // Write one element on each line, indented one level more than the array.
+                let elementIndentation = String(repeating: Self.indentation, count: indentLevel + 1)
+                let items = arr.map {
+                    "\(elementIndentation)\(serializeValue($0, indentLevel: indentLevel + 1)),\n"
+                }
+                return "[\n\(items.joined())\(String(repeating: Self.indentation, count: indentLevel))]"
+            }
+            // An empty or one-element array is on one line,
+            // but the element starts on that line and can span several lines.
+            let items = arr.map { serializeValue($0, indentLevel: indentLevel) }
             return "[\(items.joined(separator: ", "))]"
         case .table(let dict):
+            // TOML 1.0 doesn't allow newlines between an inline table's entries,
+            // but it allows them inside an array value,
+            // so each value starts on the table's line and can span several lines.
             let keys = sortKeys ? dict.keys.sorted() : Array(dict.keys)
             let items = keys.compactMap { key -> String? in
                 guard let val = dict[key] else { return nil }
-                return "\(escapeKey(key)) = \(serializeValue(val, sortKeys: sortKeys))"
+                return "\(escapeKey(key)) = \(serializeValue(val, indentLevel: indentLevel))"
             }
             return "{ \(items.joined(separator: ", ")) }"
         }
@@ -394,9 +497,19 @@ public enum TOMLEncodingError: Error, CustomStringConvertible, Sendable {
     case invalidValue(String, codingPath: [any CodingKey])
 
     /// The type is not supported for TOML encoding.
+    @available(
+        *,
+        deprecated,
+        message: "TOMLEncoder never throws this error; it throws invalidValue for a value that TOML can't represent"
+    )
     case unsupportedType(String, codingPath: [any CodingKey])
 
     /// The key is not valid for TOML.
+    @available(
+        *,
+        deprecated,
+        message: "TOMLEncoder never throws this error; it quotes keys as needed and throws only invalidValue"
+    )
     case invalidKey(String)
 
     public var description: String {
@@ -404,11 +517,25 @@ public enum TOMLEncodingError: Error, CustomStringConvertible, Sendable {
         case .invalidValue(let message, let codingPath):
             let path = codingPath.map(\.stringValue).joined(separator: ".")
             return "Invalid value at '\(path)': \(message)"
+        default:
+            // Read the deprecated cases' descriptions through a protocol,
+            // so that this switch doesn't use them and cause deprecation warnings.
+            return (self as any DeprecatedCaseDescribing).deprecatedCaseDescription
+        }
+    }
+}
+
+extension TOMLEncodingError: DeprecatedCaseDescribing {
+    @available(*, deprecated)
+    var deprecatedCaseDescription: String {
+        switch self {
         case .unsupportedType(let type, let codingPath):
             let path = codingPath.map(\.stringValue).joined(separator: ".")
             return "Unsupported type '\(type)' at '\(path)'"
         case .invalidKey(let key):
             return "Invalid TOML key: '\(key)'"
+        case .invalidValue:
+            return description
         }
     }
 }
@@ -449,15 +576,28 @@ final class _TOMLEncoder: Encoder {
     /// when it's released.
     private let superEncoderTarget: (table: EncodedTable, key: String)?
 
+    /// Whether a keyed container for this encoder writes its keys
+    /// without applying the key encoding strategy.
+    ///
+    /// Like `JSONEncoder`, the encoder keeps the keys of a dictionary with `String` keys,
+    /// but it applies the strategy to the tables inside the dictionary.
+    private let keepsTableKeys: Bool
+
     /// Creates an encoder with its own error context,
     /// for the top-level value or a value that a container boxes.
-    convenience init(codingPath: [any CodingKey], userInfo: [CodingUserInfoKey: Any], options: EncodingOptions) {
+    convenience init(
+        codingPath: [any CodingKey],
+        userInfo: [CodingUserInfoKey: Any],
+        options: EncodingOptions,
+        keepsTableKeys: Bool = false
+    ) {
         self.init(
             codingPath: codingPath,
             userInfo: userInfo,
             options: options,
             context: EncodingContext(),
-            superEncoderTarget: nil
+            superEncoderTarget: nil,
+            keepsTableKeys: keepsTableKeys
         )
     }
 
@@ -466,13 +606,15 @@ final class _TOMLEncoder: Encoder {
         userInfo: [CodingUserInfoKey: Any],
         options: EncodingOptions,
         context: EncodingContext,
-        superEncoderTarget: (table: EncodedTable, key: String)?
+        superEncoderTarget: (table: EncodedTable, key: String)?,
+        keepsTableKeys: Bool
     ) {
         self.codingPath = codingPath
         self.userInfo = userInfo
         self.options = options
         self.context = context
         self.superEncoderTarget = superEncoderTarget
+        self.keepsTableKeys = keepsTableKeys
     }
 
     deinit {
@@ -497,7 +639,8 @@ final class _TOMLEncoder: Encoder {
             userInfo: userInfo,
             options: options,
             context: context,
-            superEncoderTarget: target
+            superEncoderTarget: target,
+            keepsTableKeys: false
         )
     }
 
@@ -530,7 +673,8 @@ final class _TOMLEncoder: Encoder {
         let container = TOMLKeyedEncodingContainer<Key>(
             encoder: self,
             codingPath: codingPath,
-            table: table
+            table: table,
+            convertsKeys: !keepsTableKeys
         )
         return KeyedEncodingContainer(container)
     }
@@ -652,7 +796,12 @@ private extension _TOMLEncoder {
 
         // The value gets its own error context,
         // so an error that the caller catches doesn't reach later values.
-        let encoder = _TOMLEncoder(codingPath: codingPath, userInfo: userInfo, options: options)
+        let encoder = _TOMLEncoder(
+            codingPath: codingPath,
+            userInfo: userInfo,
+            options: options,
+            keepsTableKeys: value is any StringKeyedDictionary
+        )
         try value.encode(to: encoder)
 
         if let v = try encoder.encodedValue() {
@@ -835,17 +984,26 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
 
     private let table: EncodedTable
 
-    init(encoder: _TOMLEncoder, codingPath: [any CodingKey], table: EncodedTable) {
+    /// Whether the container applies the key encoding strategy to its keys.
+    private let convertsKeys: Bool
+
+    init(encoder: _TOMLEncoder, codingPath: [any CodingKey], table: EncodedTable, convertsKeys: Bool = true) {
         self.encoder = encoder
         self.codingPath = codingPath
         self.table = table
+        self.convertsKeys = convertsKeys
+    }
+
+    /// Returns the key that the container writes in its table for a coding key.
+    private func convertKey(_ key: any CodingKey) -> String {
+        convertsKeys ? encoder.convertKey(key) : key.stringValue
     }
 
     /// Writes a value at the given key.
     ///
     /// Like `JSONEncoder`, the last value written at a key replaces the others.
     private func set(_ value: TOMLValue, forKey key: Key) {
-        table.entries[encoder.convertKey(key)] = .value(value)
+        table.entries[convertKey(key)] = .value(value)
     }
 
     mutating func encodeNil(forKey key: Key) throws {
@@ -918,7 +1076,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     ) -> KeyedEncodingContainer<NestedKey> {
         let nestedPath = codingPath + [key]
         let nestedTable =
-            tableStorage(at: &table.entries[encoder.convertKey(key)])
+            tableStorage(at: &table.entries[convertKey(key)])
             ?? encoder.conflictingTable(at: nestedPath)
         let container = TOMLKeyedEncodingContainer<NestedKey>(
             encoder: encoder,
@@ -931,7 +1089,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     mutating func nestedUnkeyedContainer(forKey key: Key) -> any UnkeyedEncodingContainer {
         let nestedPath = codingPath + [key]
         let nestedArray =
-            arrayStorage(at: &table.entries[encoder.convertKey(key)])
+            arrayStorage(at: &table.entries[convertKey(key)])
             ?? encoder.conflictingArray(at: nestedPath)
         return TOMLUnkeyedEncodingContainer(
             encoder: encoder,
@@ -956,7 +1114,7 @@ private struct TOMLKeyedEncodingContainer<Key: CodingKey>: KeyedEncodingContaine
     /// A value that this container writes at the key after that release
     /// replaces the super encoder's value.
     private func superEncoder(forCodingKey key: any CodingKey) -> any Encoder {
-        let convertedKey = encoder.convertKey(key)
+        let convertedKey = convertKey(key)
         let superEncoder = encoder.makeSuperEncoder(
             codingPath: codingPath + [key],
             target: (table, convertedKey)
@@ -1168,19 +1326,74 @@ private struct TOMLSingleValueEncodingContainer: SingleValueEncodingContainer {
 // MARK: - Private Extensions
 
 private extension String {
+    /// Converts a camelCase key to snake_case, as `JSONEncoder` does.
+    ///
+    /// This follows Foundation's algorithm.
+    /// A word starts at an uppercase letter that follows a letter that isn't uppercase,
+    /// and at the last letter of a run of uppercase letters that a lowercase letter follows.
+    /// The first character never starts a word.
+    /// The conversion joins the words with underscores and lowercases them.
+    /// It keeps leading and trailing underscores.
+    ///
+    /// For example, `userID` becomes `user_id`, `myURLValue` becomes `my_url_value`,
+    /// `URLSession` becomes `u_rl_session`, and `PATH` becomes `p_ath`.
+    ///
+    /// Like Foundation, the conversion tests Unicode scalars for letters,
+    /// but it moves by characters to skip the first character
+    /// and to find the characters next to a letter,
+    /// so it doesn't separate an accent from its letter.
+    /// These methods round an index inside a character down to the start of the character.
     func convertToSnakeCase() -> String {
-        var result = ""
-        for (index, char) in self.enumerated() {
-            if char.isUppercase {
-                if index > 0 {
-                    result += "_"
-                }
-                result += char.lowercased()
-            } else {
-                result.append(char)
+        guard !isEmpty else { return self }
+
+        var words: [Range<String.Index>] = []
+        var wordStart = startIndex
+        var searchStart = index(after: wordStart)
+
+        while let upper = self[searchStart...].unicodeScalars.firstIndex(where: \.isUppercaseLetter) {
+            words.append(wordStart ..< upper)
+
+            guard let lower = self[upper...].unicodeScalars.firstIndex(where: \.isLowercaseLetter) else {
+                // No lowercase letters follow, so the rest of the key is one word.
+                wordStart = upper
+                break
             }
+
+            let beforeLower = index(before: lower)
+            if lower == index(after: upper) || beforeLower < upper {
+                // A lowercase letter follows the uppercase letter, so they're in one word.
+                // The character before the lowercase letter can also start before the uppercase letter,
+                // such as in `"a\u{0600}A\u{0600}a"`, where `JSONEncoder` stops with a fatal error;
+                // the conversion doesn't start a word there.
+                wordStart = upper
+            } else {
+                // A run of uppercase letters is a word,
+                // except for its last character, which starts the next word.
+                words.append(upper ..< beforeLower)
+                wordStart = beforeLower
+            }
+            searchStart = unicodeScalars.index(after: lower)
         }
-        return result
+        words.append(wordStart ..< endIndex)
+
+        return words.map { self[$0].lowercased() }.joined(separator: "_")
+    }
+}
+
+private extension Unicode.Scalar {
+    /// Whether the scalar is in the Unicode general category Lu or Lt,
+    /// as in Foundation's `uppercaseLetters` character set.
+    var isUppercaseLetter: Bool {
+        switch properties.generalCategory {
+        case .uppercaseLetter, .titlecaseLetter: return true
+        default: return false
+        }
+    }
+
+    /// Whether the scalar is in the Unicode general category Ll,
+    /// as in Foundation's `lowercaseLetters` character set.
+    var isLowercaseLetter: Bool {
+        properties.generalCategory == .lowercaseLetter
     }
 }
 

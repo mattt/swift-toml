@@ -449,6 +449,277 @@ struct EncoderTests {
         #expect(toml.contains("created_at = 123"))
     }
 
+    /// A key that a test chooses at run time.
+    struct DynamicKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+
+        init(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            nil
+        }
+    }
+
+    /// Encodes one integer at a key that the test chooses.
+    struct SingleKey: Encodable {
+        let key: String
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: DynamicKey.self)
+            try container.encode(1, forKey: DynamicKey(stringValue: key))
+        }
+    }
+
+    @Test(
+        arguments: [
+            "userID", "URLSession", "myURLValue", "PATH", "a", "A", "_leading", "_Leading", "trailing_",
+            "trailingX_", "alreadySnake_case", "version2Name", "v2URL", "x1Y2", "HTTPServer2Go", "aBC", "ABc",
+            "a_B", "__a__B", "", "fooÜber", "ÉtéÀ", "aA\u{0301}b", "\u{0600}Aa", "aA\u{0600}b", "e\u{0301}Ab",
+        ]
+    )
+    func convertToSnakeCaseMatchesJSONEncoder(key: String) throws {
+        let tomlEncoder = TOMLEncoder()
+        tomlEncoder.keyEncodingStrategy = .convertToSnakeCase
+        let jsonEncoder = JSONEncoder()
+        jsonEncoder.keyEncodingStrategy = .convertToSnakeCase
+
+        let toml = try TOMLDecoder().decode([String: Int].self, from: tomlEncoder.encode(SingleKey(key: key)))
+        let json = try JSONDecoder().decode([String: Int].self, from: jsonEncoder.encode(SingleKey(key: key)))
+        #expect(Array(toml.keys) == Array(json.keys))
+    }
+
+    /// `JSONEncoder` stops with a fatal error for this key,
+    /// because the character before the lowercase letter starts before the uppercase letter.
+    @Test func convertToSnakeCaseCharacterBeforeLowercaseStartsEarlier() throws {
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let toml = try TOMLDecoder().decode(
+            [String: Int].self,
+            from: encoder.encode(SingleKey(key: "a\u{0600}A\u{0600}a"))
+        )
+        #expect(Array(toml.keys) == ["a\u{0600}_a\u{0600}a"])
+    }
+
+    @Test func convertToSnakeCaseAcronyms() throws {
+        struct Config: Codable {
+            let userID: Int
+            let myURLValue: Int
+            let version2Name: Int
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.outputFormatting = .sortedKeys
+        let toml = try encoder.encodeToString(Config(userID: 1, myURLValue: 2, version2Name: 3))
+
+        #expect(
+            toml == """
+                my_url_value = 2
+                user_id = 1
+                version2_name = 3
+
+                """
+        )
+    }
+
+    /// Like `JSONEncoder`, the strategy splits a leading acronym after its first letter,
+    /// and an explicit coding key writes another key.
+    @Test func convertToSnakeCaseLeadingAcronyms() throws {
+        struct Implicit: Encodable {
+            let URLSession: Int
+            let PATH: Int
+        }
+        struct Explicit: Codable, Equatable {
+            let URLSession: Int
+            let PATH: Int
+
+            enum CodingKeys: String, CodingKey {
+                case URLSession = "urlSession"
+                case PATH = "path"
+            }
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.outputFormatting = .sortedKeys
+        let jsonEncoder = JSONEncoder()
+        jsonEncoder.keyEncodingStrategy = .convertToSnakeCase
+        jsonEncoder.outputFormatting = .sortedKeys
+
+        let implicit = Implicit(URLSession: 1, PATH: 2)
+        #expect(try encoder.encodeToString(implicit) == "p_ath = 2\nu_rl_session = 1\n")
+        #expect(try jsonEncoder.encode(implicit) == Data(#"{"p_ath":2,"u_rl_session":1}"#.utf8))
+
+        let explicit = Explicit(URLSession: 1, PATH: 2)
+        #expect(try encoder.encodeToString(explicit) == "path = 2\nurl_session = 1\n")
+
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        #expect(try decoder.decode(Explicit.self, from: encoder.encode(explicit)) == explicit)
+    }
+
+    @Test func convertToSnakeCaseInNestedContainersAndDictionaries() throws {
+        struct Inner: Codable {
+            let innerID: Int
+        }
+        struct Config: Codable {
+            let serverURL: Inner
+            let itemList: [Inner]
+            let tableByName: [String: Int]
+        }
+
+        let config = Config(
+            serverURL: Inner(innerID: 1),
+            itemList: [Inner(innerID: 2)],
+            tableByName: ["myURLValue": 3]
+        )
+        let value = try expectSameStructure(config, snakeCaseKeys: true)
+
+        // Like `JSONEncoder`, `TOMLEncoder` doesn't convert the keys of a dictionary with `String` keys.
+        #expect(
+            value
+                == .table([
+                    "server_url": .table(["inner_id": .integer(1)]),
+                    "item_list": .array([.table(["inner_id": .integer(2)])]),
+                    "table_by_name": .table(["myURLValue": .integer(3)]),
+                ])
+        )
+    }
+
+    /// A table of camelCase keys, for values in dictionaries.
+    struct Service: Codable, Equatable {
+        let displayName: String
+        let extraHeaders: [String: String]
+    }
+
+    /// Like `JSONEncoder`, the strategy keeps the keys of a dictionary property
+    /// and converts the keys of the tables in it.
+    @Test func convertToSnakeCaseDictionaryProperty() throws {
+        struct Config: Encodable {
+            let envVars: [String: String]
+            let serviceByName: [String: Service]
+        }
+
+        let config = Config(
+            envVars: ["MY_VAR": "1", "otherVar": "2"],
+            serviceByName: ["webServer": Service(displayName: "Web", extraHeaders: ["X-Request-ID": "a"])]
+        )
+        #expect(
+            try expectSameStructure(config, snakeCaseKeys: true)
+                == .table([
+                    "env_vars": .table(["MY_VAR": .string("1"), "otherVar": .string("2")]),
+                    "service_by_name": .table([
+                        "webServer": .table([
+                            "display_name": .string("Web"),
+                            "extra_headers": .table(["X-Request-ID": .string("a")]),
+                        ])
+                    ]),
+                ])
+        )
+    }
+
+    /// Like `JSONEncoder`, the strategy keeps the keys of a top-level dictionary.
+    @Test func convertToSnakeCaseTopLevelDictionary() throws {
+        #expect(
+            try expectSameStructure(["myURLValue": 1, "userID": 2], snakeCaseKeys: true)
+                == .table(["myURLValue": .integer(1), "userID": .integer(2)])
+        )
+        #expect(
+            try expectSameStructure(
+                ["webServer": Service(displayName: "Web", extraHeaders: [:])],
+                snakeCaseKeys: true
+            ) == .table(["webServer": .table(["display_name": .string("Web"), "extra_headers": .table([:])])])
+        )
+    }
+
+    /// Like `JSONEncoder`, the strategy keeps the keys of each dictionary in a nested dictionary.
+    @Test func convertToSnakeCaseNestedDictionary() throws {
+        struct Config: Encodable {
+            let servicesByRegion: [String: [String: Service]]
+        }
+
+        let config = Config(
+            servicesByRegion: [
+                "usEast": ["webServer": Service(displayName: "Web", extraHeaders: ["X-Request-ID": "a"])]
+            ]
+        )
+        #expect(
+            try expectSameStructure(config, snakeCaseKeys: true)
+                == .table([
+                    "services_by_region": .table([
+                        "usEast": .table([
+                            "webServer": .table([
+                                "display_name": .string("Web"),
+                                "extra_headers": .table(["X-Request-ID": .string("a")]),
+                            ])
+                        ])
+                    ])
+                ])
+        )
+    }
+
+    /// Like `JSONEncoder`, the strategy converts the keys of a dictionary
+    /// whose own `encode(to:)` method a custom `encode(to:)` method calls directly.
+    @Test func convertToSnakeCaseDictionaryEncodedDirectly() throws {
+        struct Direct: Encodable {
+            let values: [String: Int]
+
+            func encode(to encoder: any Encoder) throws {
+                try values.encode(to: encoder)
+            }
+        }
+        struct DirectWithSuperEncoder: Encodable {
+            let values: [String: Int]
+
+            enum CodingKeys: CodingKey {}
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try values.encode(to: container.superEncoder())
+            }
+        }
+
+        #expect(
+            try expectSameStructure(Direct(values: ["myValue": 1]), snakeCaseKeys: true)
+                == .table(["my_value": .integer(1)])
+        )
+        #expect(
+            try expectSameStructure(DirectWithSuperEncoder(values: ["myValue": 1]), snakeCaseKeys: true)
+                == .table(["super": .table(["my_value": .integer(1)])])
+        )
+    }
+
+    /// An explicit coding key round-trips a property such as `userID`,
+    /// which the key strategies alone don't.
+    @Test func convertToSnakeCaseRoundTripWithExplicitCodingKey() throws {
+        struct Implicit: Codable, Equatable {
+            let userID: Int
+        }
+        struct Explicit: Codable, Equatable {
+            let userID: Int
+
+            enum CodingKeys: String, CodingKey {
+                case userID = "userId"
+            }
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let decoder = TOMLDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        #expect(try encoder.encodeToString(Implicit(userID: 1)) == "user_id = 1\n")
+        #expect(throws: DecodingError.self) {
+            try decoder.decode(Implicit.self, from: encoder.encode(Implicit(userID: 1)))
+        }
+
+        #expect(try encoder.encodeToString(Explicit(userID: 1)) == "user_id = 1\n")
+        #expect(try decoder.decode(Explicit.self, from: encoder.encode(Explicit(userID: 1))) == Explicit(userID: 1))
+    }
+
     @Test func encodeUseDefaultKeys() throws {
         struct Config: Codable {
             let userName: String
@@ -482,15 +753,278 @@ struct EncoderTests {
         #expect(lines[2].hasPrefix("zebra"))
     }
 
-    @Test func prettyPrintedOutput() throws {
-        struct Config: Codable {
-            let name: String
+    /// A value with arrays of each shape that the serializer writes.
+    struct ArrayShapes: Codable, Equatable {
+        struct Server: Codable, Equatable {
+            let hosts: [String]
         }
 
-        let config = Config(name: "test")
+        struct Service: Codable, Equatable {
+            let name: String
+            let ports: [Int]
+        }
+
+        /// An array of an integer and a table,
+        /// which the serializer writes as an inline array with an inline table.
+        struct Mixed: Codable, Equatable {
+            let number: Int
+            let values: [Int]
+
+            enum CodingKeys: String, CodingKey {
+                case values
+            }
+
+            init(number: Int, values: [Int]) {
+                self.number = number
+                self.values = values
+            }
+
+            init(from decoder: any Decoder) throws {
+                var container = try decoder.unkeyedContainer()
+                number = try container.decode(Int.self)
+                values = try container.nestedContainer(keyedBy: CodingKeys.self).decode([Int].self, forKey: .values)
+            }
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.unkeyedContainer()
+                try container.encode(number)
+                var table = container.nestedContainer(keyedBy: CodingKeys.self)
+                try table.encode(values, forKey: .values)
+            }
+        }
+
+        var name = "app"
+        var ports = [8080, 8081]
+        var single = [[1, 2]]
+        var empty: [Int] = []
+        var matrix = [[1, 2], [3]]
+        var cube = [[[1, 2], [3]], [[4, 5]]]
+        var mixed = Mixed(number: 1, values: [2, 3])
+        var server = Server(hosts: ["a", "b"])
+        var services = [Service(name: "web", ports: [80, 443]), Service(name: "db", ports: [5432])]
+    }
+
+    @Test func prettyPrintedOutput() throws {
+        struct Config: Codable {
+            let ports: [Int]
+        }
+
         let encoder = TOMLEncoder()
         encoder.outputFormatting = .prettyPrinted
-        _ = try encoder.encodeToString(config)
+        let toml = try encoder.encodeToString(Config(ports: [8080, 8081]))
+
+        #expect(
+            toml == """
+                ports = [
+                    8080,
+                    8081,
+                ]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedNestedArrays() throws {
+        struct Config: Codable {
+            let matrix: [[Int]]
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let toml = try encoder.encodeToString(Config(matrix: [[1, 2], [3]]))
+
+        #expect(
+            toml == """
+                matrix = [
+                    [
+                        1,
+                        2,
+                    ],
+                    [3],
+                ]
+
+                """
+        )
+    }
+
+    /// An inline table's braces stay on its line,
+    /// and an array of more than one element in it spans several lines.
+    @Test func prettyPrintedArrayInInlineTable() throws {
+        struct Config: Codable {
+            let mixed: ArrayShapes.Mixed
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let toml = try encoder.encodeToString(Config(mixed: .init(number: 1, values: [2, 3])))
+
+        #expect(
+            toml == """
+                mixed = [
+                    1,
+                    { values = [
+                        2,
+                        3,
+                    ] },
+                ]
+
+                """
+        )
+    }
+
+    /// A one-element array's brackets stay on its line,
+    /// and an array of more than one element in it spans several lines.
+    @Test func prettyPrintedArrayInOneElementArray() throws {
+        struct Config: Codable {
+            let single: [[Int]]
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let toml = try encoder.encodeToString(Config(single: [[1, 2]]))
+
+        #expect(
+            toml == """
+                single = [[
+                    1,
+                    2,
+                ]]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedArrayOfTables() throws {
+        struct Service: Codable {
+            let ports: [Int]
+        }
+        struct Config: Codable {
+            let services: [Service]
+        }
+
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let toml = try encoder.encodeToString(Config(services: [Service(ports: [80, 443]), Service(ports: [5432])]))
+
+        #expect(
+            toml == """
+
+                [[services]]
+                ports = [
+                    80,
+                    443,
+                ]
+
+                [[services]]
+                ports = [5432]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedWithSortedKeys() throws {
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        let toml = try encoder.encodeToString(ArrayShapes())
+
+        #expect(
+            toml == """
+                cube = [
+                    [
+                        [
+                            1,
+                            2,
+                        ],
+                        [3],
+                    ],
+                    [[
+                        4,
+                        5,
+                    ]],
+                ]
+                empty = []
+                matrix = [
+                    [
+                        1,
+                        2,
+                    ],
+                    [3],
+                ]
+                mixed = [
+                    1,
+                    { values = [
+                        2,
+                        3,
+                    ] },
+                ]
+                name = "app"
+                ports = [
+                    8080,
+                    8081,
+                ]
+                single = [[
+                    1,
+                    2,
+                ]]
+
+                [server]
+                hosts = [
+                    "a",
+                    "b",
+                ]
+
+                [[services]]
+                name = "web"
+                ports = [
+                    80,
+                    443,
+                ]
+
+                [[services]]
+                name = "db"
+                ports = [5432]
+
+                """
+        )
+    }
+
+    @Test func prettyPrintedRoundTrip() throws {
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let data = try encoder.encode(ArrayShapes())
+
+        #expect(try TOMLDecoder().decode(ArrayShapes.self, from: data) == ArrayShapes())
+    }
+
+    /// The output without `prettyPrinted` is the same as in version 2.2.2.
+    @Test func defaultOutputUnchanged() throws {
+        let encoder = TOMLEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let toml = try encoder.encodeToString(ArrayShapes())
+
+        #expect(
+            toml == """
+                cube = [[[1, 2], [3]], [[4, 5]]]
+                empty = []
+                matrix = [[1, 2], [3]]
+                mixed = [1, { values = [2, 3] }]
+                name = "app"
+                ports = [8080, 8081]
+                single = [[1, 2]]
+
+                [server]
+                hosts = ["a", "b"]
+
+                [[services]]
+                name = "web"
+                ports = [80, 443]
+
+                [[services]]
+                name = "db"
+                ports = [5432]
+
+                """
+        )
     }
 
     @Test func combinedOutputFormatting() throws {
@@ -709,12 +1243,16 @@ struct EncoderTests {
         #expect(error.description.contains("bad value"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionUnsupportedType() {
         let error = TOMLEncodingError.unsupportedType("CustomType", codingPath: [])
         #expect(error.description.contains("Unsupported type"))
         #expect(error.description.contains("CustomType"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionUnsupportedTypeWithPath() {
         struct TestKey: CodingKey {
             var stringValue: String
@@ -730,6 +1268,8 @@ struct EncoderTests {
         #expect(error.description.contains("BadType"))
     }
 
+    // The test uses a deprecated case to check that its description stays the same.
+    @available(*, deprecated)
     @Test func errorDescriptionInvalidKey() {
         let error = TOMLEncodingError.invalidKey("bad key!")
         #expect(error.description.contains("Invalid TOML key"))
