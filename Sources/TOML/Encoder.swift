@@ -448,9 +448,15 @@ private struct Serializer {
     }
 
     private func formatOffsetDateTime(_ date: Date) -> String {
+        // The formatter rounds fractions, but TOML requires truncation.
+        // Compare in seconds so an exact millisecond survives floating-point conversion.
+        let seconds = date.timeIntervalSinceReferenceDate
+        let nearest = (seconds * 1000).rounded()
+        let milliseconds = nearest / 1000 > seconds ? nearest - 1 : nearest
+        let truncated = Date(timeIntervalSinceReferenceDate: milliseconds / 1000)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        return formatter.string(from: truncated)
     }
 
     private func formatLocalDateTime(_ dt: LocalDateTime) -> String {

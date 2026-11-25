@@ -507,7 +507,6 @@ public final class TOMLDecoder {
                 components.hour = Int(dt.time.hour)
                 components.minute = Int(dt.time.minute)
                 components.second = Int(dt.time.second)
-                components.nanosecond = Int(dt.time.nanosecond)
 
                 // `TimeZone(secondsFromGMT:)` rejects offsets above 18 hours,
                 // but TOML allows offsets up to 23:59,
@@ -518,7 +517,16 @@ public final class TOMLDecoder {
                     throw TOMLDecodingError.invalidData("Offset date-time is not a valid date")
                 }
                 let offset = TimeInterval(Int(dt.offset_minutes) * 60)
-                return .offsetDateTime(utcDate.addingTimeInterval(-offset))
+                let seconds = utcDate.timeIntervalSinceReferenceDate - offset
+                let nanoseconds = dt.time.nanosecond
+                // For an exact millisecond, convert to fractional seconds only once.
+                // All whole milliseconds in TOML's four-digit year range fit exactly in a Double.
+                if nanoseconds.isMultiple(of: 1_000_000) {
+                    let milliseconds = seconds * 1000 + Double(nanoseconds / 1_000_000)
+                    return .offsetDateTime(Date(timeIntervalSinceReferenceDate: milliseconds / 1000))
+                }
+                let fraction = Double(nanoseconds) / 1_000_000_000
+                return .offsetDateTime(Date(timeIntervalSinceReferenceDate: seconds + fraction))
             }
             return .localDateTime(
                 LocalDateTime(
